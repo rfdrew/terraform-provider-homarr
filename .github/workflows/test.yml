@@ -1,0 +1,109 @@
+# Build, vet and test on every push and pull request.
+#
+# The acceptance job boots a throwaway Homarr container, completes its onboarding
+# and mints an API key, so the provider is exercised against the real API rather
+# than a mock.
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build and unit test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Verify formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - run: go vet ./...
+
+      - run: go build ./...
+
+      - name: Unit tests
+        run: go test ./internal/client/ -v
+
+  docs:
+    name: docs are up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Regenerate docs
+        run: make docs
+
+      - name: Fail if docs are stale
+        run: |
+          if ! git diff --exit-code -- docs/; then
+            echo "docs/ is out of date - run 'make docs' and commit the result."
+            exit 1
+          fi
+
+  acceptance:
+    name: acceptance tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        terraform: ["1.9.*", "1.14.*"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ matrix.terraform }}
+          terraform_wrapper: false
+
+      - name: Boot Homarr and mint an API key
+        run: |
+          chmod +x scripts/bootstrap-test-homarr.sh
+          scripts/bootstrap-test-homarr.sh > /tmp/homarr.env
+          # The script prints `export` lines on stdout; feed them into the job
+          # environment without echoing the key into the log.
+          sed 's/^export //' /tmp/homarr.env >> "$GITHUB_ENV"
+
+      - name: Acceptance tests
+        env:
+          TF_ACC: "1"
+        run: go test ./internal/provider/ -v -timeout 30m
+
+      - name: Homarr logs on failure
+        if: failure()
+        run: docker logs --tail 200 homarr-tfprovider-test || true
+
+      - name: Tear down Homarr
+        if: always()
+        run: scripts/bootstrap-test-homarr.sh --teardown || true
