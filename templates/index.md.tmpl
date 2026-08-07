@@ -16,16 +16,24 @@ and an internal tRPC surface under `/api/trpc/…`. This provider only uses the
 former, because the tRPC layer is an implementation detail of the Homarr web UI
 and changes without notice.
 
-That boundary determines what can be managed. **Integrations, groups, widgets,
-board items and layouts are tRPC-only in Homarr and therefore not available
-here.** Within the REST surface, a few endpoints are write-only or create-only;
-each affected attribute says so in its own documentation, and the most
-consequential cases are:
+That boundary determines what can be managed. **Integrations, groups and board
+layouts are tRPC-only in Homarr and therefore not available here.**
+
+**Board items — the tiles on a board — are a special case.** Creating one is
+available over REST (`POST /api/boards/items`), but nothing lists, updates, moves,
+resizes or deletes an item. A resource built on that could only add tiles and
+never converge on a desired state, so it is deliberately absent; see
+[homarr-labs/homarr#6435](https://github.com/homarr-labs/homarr/issues/6435).
+
+Within the REST surface, a few endpoints are write-only or create-only; each
+affected attribute says so in its own documentation, and the most consequential
+cases are:
 
 | Limitation | Effect |
 | --- | --- |
 | No `GET` for per-board settings | `homarr_board_settings` cannot detect drift; state reflects the last applied configuration |
 | Column count absent from board responses | `homarr_board.column_count` forces replacement when changed and needs a composite import id |
+| Board items are create-only | Tiles cannot be managed declaratively and are not exposed as a resource |
 | Group membership not readable | `homarr_user.group_ids` is create-only and forces replacement |
 | Passwords not readable | A password changed outside Terraform is not detected as drift |
 | Invite tokens returned once | `homarr_invite.token` cannot be recovered after creation or by import |

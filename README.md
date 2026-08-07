@@ -14,10 +14,19 @@ through REST — `app`, `board`, `info`, `invite`, `serverSettings` and `user`
 (see [`packages/api/src/open-api.ts`](https://github.com/homarr-labs/homarr/blob/dev/packages/api/src/open-api.ts))
 — and this provider is deliberately limited to those.
 
-Consequently there is **no support for integrations, groups, widgets, board items
-or layouts**. Those exist only over tRPC, which uses superjson-encoded payloads
-and changes freely between releases; building resources on it would produce a
-provider that breaks on every Homarr upgrade.
+Consequently there is **no support for integrations, groups or board layouts**.
+Those exist only over tRPC, which uses superjson-encoded payloads and changes
+freely between releases; building resources on it would produce a provider that
+breaks on every Homarr upgrade.
+
+**Board items (the tiles on a board) are a special case.** Creating one *is*
+available over REST — `POST /api/boards/items` adds a widget or app tile and
+returns its id. But there is no endpoint to list, update, move, resize or delete
+an item, so a tile can be created and then never reconciled. A Terraform resource
+built on create-only semantics could only ever add tiles to a board, never
+converge on a desired state, so this provider leaves the capability out. See
+[homarr-labs/homarr#6435](https://github.com/homarr-labs/homarr/issues/6435) for
+the upstream discussion.
 
 ## Resources and data sources
 

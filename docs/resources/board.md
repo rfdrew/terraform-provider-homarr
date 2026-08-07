@@ -4,7 +4,7 @@ page_title: "homarr_board Resource - Homarr"
 subcategory: ""
 description: |-
   Manages a Homarr board — a dashboard page.
-  A new board is created with one empty section and one layout, exactly as the Homarr UI does. The widgets and app tiles placed on a board are not manageable here: Homarr only exposes board layout and item mutations over tRPC, not REST.
+  A new board is created with one empty section and one layout, exactly as the Homarr UI does. The widgets and app tiles placed on a board are not manageable here. Homarr can create an item over REST (POST /api/boards/items) but offers no way to list, update, move, resize or delete one, and the board's layout is tRPC-only — not enough to reconcile tiles declaratively.
   ~> Note Homarr makes the first board you create the creating user's home board automatically. That shows up in the computed is_home attribute and is not something the provider controls; use homarr_server_board_settings to set the instance-wide home board.
 ---
 
@@ -12,7 +12,7 @@ description: |-
 
 Manages a Homarr board — a dashboard page.
 
-A new board is created with one empty section and one layout, exactly as the Homarr UI does. The widgets and app tiles placed *on* a board are not manageable here: Homarr only exposes board layout and item mutations over tRPC, not REST.
+A new board is created with one empty section and one layout, exactly as the Homarr UI does. The widgets and app tiles placed *on* a board are not manageable here. Homarr can create an item over REST (`POST /api/boards/items`) but offers no way to list, update, move, resize or delete one, and the board's layout is tRPC-only — not enough to reconcile tiles declaratively.
 
 ~> **Note** Homarr makes the first board you create the creating user's home board automatically. That shows up in the computed `is_home` attribute and is not something the provider controls; use `homarr_server_board_settings` to set the instance-wide home board.
 

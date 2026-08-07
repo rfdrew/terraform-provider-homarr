@@ -49,8 +49,9 @@ func (p *homarrProvider) Schema(_ context.Context, _ provider.SchemaRequest, res
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages resources in a [Homarr](https://homarr.dev) dashboard instance through its " +
 			"OpenAPI-compatible REST API.\n\n" +
-			"Only the subset of Homarr's API that is exposed over REST can be managed. Integrations, groups, " +
-			"widgets and board items are tRPC-only in Homarr and therefore out of scope for this provider.",
+			"Only the subset of Homarr's API that is exposed over REST can be managed. Integrations, groups and " +
+			"board layouts are tRPC-only in Homarr and therefore out of scope. Board items can be created over " +
+			"REST but not read, updated or deleted, which is not enough to manage them declaratively.",
 		Attributes: map[string]schema.Attribute{
 			"url": schema.StringAttribute{
 				Optional: true,
