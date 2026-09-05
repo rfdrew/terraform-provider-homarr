@@ -81,8 +81,10 @@ func (r *appResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 			},
 			"href": schema.StringAttribute{
 				Optional: true,
-				MarkdownDescription: "URL the app tile links to. Must be an absolute URL with a scheme; " +
-					"`javascript:` is rejected by Homarr.",
+				MarkdownDescription: "URL or URI the app tile links to. Homarr 1.74.0 and later reject " +
+					"only `javascript:` URIs and accept everything else, including schemes written " +
+					"without `//` such as `mailto:`, and relative paths. Homarr 1.73.x additionally " +
+					"required an absolute `scheme://` URL.",
 			},
 			"ping_url": schema.StringAttribute{
 				Optional: true,

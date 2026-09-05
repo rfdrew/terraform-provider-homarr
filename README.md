@@ -3,7 +3,7 @@
 A Terraform provider for [Homarr](https://homarr.dev), managed through Homarr's
 OpenAPI-compatible REST API.
 
-Built and verified against **Homarr 1.73.0**.
+Built and verified against **Homarr 1.76.2**.
 
 ## Why the surface is small
 
@@ -102,7 +102,7 @@ resource "homarr_app" "grafana" {
 }
 ```
 
-Full documentation for every resource and data source lives in [`docs/`](docs/)
+Full documentation for every resource and data source lives in [`docs`](docs/)
 and, once published, on the Terraform Registry.
 
 ### Provider configuration

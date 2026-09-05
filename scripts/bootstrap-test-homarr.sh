@@ -16,7 +16,7 @@
 set -euo pipefail
 
 CONTAINER="${HOMARR_TEST_CONTAINER:-homarr-tfprovider-test}"
-IMAGE="${HOMARR_TEST_IMAGE:-ghcr.io/homarr-labs/homarr:v1.73.0}"
+IMAGE="${HOMARR_TEST_IMAGE:-ghcr.io/homarr-labs/homarr:v1.76.2}"
 PORT="${HOMARR_TEST_PORT:-7575}"
 BASE="http://localhost:${PORT}"
 USERNAME="tfadmin"
@@ -29,6 +29,17 @@ if [[ "${1:-}" == "--teardown" ]]; then
 fi
 
 log() { echo "$*" >&2; }
+
+# The container is reused by name, so a leftover one built from another image
+# would be onboarded and tested in place of $IMAGE -- silently, and with a green
+# result. Recreate it whenever the image does not match.
+if docker inspect "$CONTAINER" >/dev/null 2>&1; then
+  existing="$(docker inspect -f '{{.Config.Image}}' "$CONTAINER")"
+  if [[ "$existing" != "$IMAGE" ]]; then
+    log "replacing $CONTAINER: it was created from $existing, not $IMAGE"
+    docker rm -f "$CONTAINER" >/dev/null
+  fi
+fi
 
 if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
   log "starting $IMAGE as $CONTAINER on port $PORT"

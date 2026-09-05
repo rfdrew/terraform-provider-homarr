@@ -61,7 +61,7 @@ resource "homarr_app" "services" {
 ### Optional
 
 - `description` (String) Optional description shown in the Homarr UI. At most 512 characters. An empty string is stored as `null` by Homarr, so use `null` rather than `""` to keep plans clean.
-- `href` (String) URL the app tile links to. Must be an absolute URL with a scheme; `javascript:` is rejected by Homarr.
+- `href` (String) URL or URI the app tile links to. Homarr 1.74.0 and later reject only `javascript:` URIs and accept everything else, including schemes written without `//` such as `mailto:`, and relative paths. Homarr 1.73.x additionally required an absolute `scheme://` URL.
 - `ping_url` (String) URL Homarr pings to show the app's online status. Must be `http://` or `https://`.
 
 ### Read-Only
