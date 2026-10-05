@@ -160,7 +160,8 @@ func (r *boardResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 					"Homarr has.\n\n" +
 					"The home board is a per-user singleton, so selecting one board deselects whichever " +
 					"board held the flag before. Declaring `is_home = true` on two boards makes them " +
-					"fight over it on every apply.\n\n" +
+					"fight over it on every apply. The board that loses the flag is not re-read during " +
+					"that apply, so its state reports `true` until the next refresh.\n\n" +
 					"~> **Note** This cannot be set to `false` — Homarr has no REST call that clears a " +
 					"home board. Move it by setting `is_home = true` elsewhere, or clear it with " +
 					"`homarr_user.home_board_id = null`.",

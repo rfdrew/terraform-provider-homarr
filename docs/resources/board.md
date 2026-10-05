@@ -60,7 +60,7 @@ resource "homarr_board" "landing" {
 
 - `is_home` (Boolean) Whether this board is the desktop home board of the user behind the API key. Set it to `true` to select this board; leave it out to report whatever Homarr has.
 
-The home board is a per-user singleton, so selecting one board deselects whichever board held the flag before. Declaring `is_home = true` on two boards makes them fight over it on every apply.
+The home board is a per-user singleton, so selecting one board deselects whichever board held the flag before. Declaring `is_home = true` on two boards makes them fight over it on every apply. The board that loses the flag is not re-read during that apply, so its state reports `true` until the next refresh.
 
 ~> **Note** This cannot be set to `false` — Homarr has no REST call that clears a home board. Move it by setting `is_home = true` elsewhere, or clear it with `homarr_user.home_board_id = null`.
 - `is_mobile_home` (Boolean) Whether this board is the mobile home board of the user behind the API key. Behaves exactly like `is_home`, against Homarr's separate mobile slot, and is subject to the same set-only restriction. Unlike `is_home` it is never assigned automatically.

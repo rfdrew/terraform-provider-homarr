@@ -124,8 +124,22 @@ resource "homarr_board" "second" {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("homarr_board.second", "is_home", "true"),
 					resource.TestCheckResourceAttr("homarr_board.second", "is_mobile_home", "true"),
+				),
+			},
+			{
+				// The first board's flags are deliberately not asserted above.
+				// Dropping the attributes from its configuration produces no
+				// diff — an omitted Optional+Computed attribute plans as its
+				// prior state — so Terraform never re-reads that board during
+				// the apply that moved the flag, and its state still says true.
+				// The correction lands on the next refresh, which is what this
+				// step exercises.
+				RefreshState: true,
+				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("homarr_board.first", "is_home", "false"),
 					resource.TestCheckResourceAttr("homarr_board.first", "is_mobile_home", "false"),
+					resource.TestCheckResourceAttr("homarr_board.second", "is_home", "true"),
+					resource.TestCheckResourceAttr("homarr_board.second", "is_mobile_home", "true"),
 				),
 			},
 		},
