@@ -11,3 +11,15 @@ resource "homarr_board" "public_status" {
   column_count = 6
   is_public    = true
 }
+
+# is_home and is_mobile_home select the home board of the user behind the API
+# key. They can only be turned on — Homarr has no call that clears a home board
+# — so to move the flag you set it on another board, and to drop it entirely you
+# set homarr_user.home_board_id to null.
+resource "homarr_board" "landing" {
+  name           = "landing"
+  column_count   = 10
+  is_public      = true
+  is_home        = true
+  is_mobile_home = true
+}

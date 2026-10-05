@@ -79,6 +79,80 @@ resource "homarr_board" "test" {
 	})
 }
 
+func TestAccBoardResource_homeBoards(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				// Selecting both home slots happens after creation, through
+				// PATCH /api/boards/{id}/home and .../mobile-home.
+				Config: providerConfig + `
+resource "homarr_board" "first" {
+  name           = "tfacchomeone"
+  column_count   = 10
+  is_public      = true
+  is_home        = true
+  is_mobile_home = true
+}
+`,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("homarr_board.first", "is_home", "true"),
+					resource.TestCheckResourceAttr("homarr_board.first", "is_mobile_home", "true"),
+				),
+			},
+			{
+				// The home board is a per-user singleton: selecting it on a
+				// second board has to drop the flag on the first. The first
+				// board stops declaring it, otherwise the two would fight over
+				// it on every apply.
+				Config: providerConfig + `
+resource "homarr_board" "first" {
+  name         = "tfacchomeone"
+  column_count = 10
+  is_public    = true
+}
+
+resource "homarr_board" "second" {
+  name           = "tfacchometwo"
+  column_count   = 10
+  is_public      = true
+  is_home        = true
+  is_mobile_home = true
+}
+`,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("homarr_board.second", "is_home", "true"),
+					resource.TestCheckResourceAttr("homarr_board.second", "is_mobile_home", "true"),
+					resource.TestCheckResourceAttr("homarr_board.first", "is_home", "false"),
+					resource.TestCheckResourceAttr("homarr_board.first", "is_mobile_home", "false"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccBoardResource_rejectsHomeFalse(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				// Homarr cannot clear a home board, so the provider refuses an
+				// explicit false at plan time rather than ignoring it.
+				Config: providerConfig + `
+resource "homarr_board" "test" {
+  name         = "tfacchomefalse"
+  column_count = 10
+  is_home      = false
+}
+`,
+				ExpectError: regexpMustCompile(`never unselect one`),
+			},
+		},
+	})
+}
+
 func TestAccBoardResource_rejectsBareImportID(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },

@@ -145,6 +145,23 @@ func (c *Client) SetBoardVisibility(ctx context.Context, id string, isPublic boo
 	return c.do(ctx, "PATCH", "/api/boards/"+url.PathEscape(id)+"/visibility", body, nil)
 }
 
+// SetBoardAsHome makes the board the desktop home board of the user behind the
+// API key.
+//
+// This is a set-only operation: Homarr writes users.homeBoardId and offers no
+// REST call to clear it. The home board is a per-user singleton, so this
+// implicitly stops whichever board held the flag before from being the home
+// board. Clearing it requires PATCH /api/users/changeHome with an explicit
+// user id — see SetUserHomeBoards.
+func (c *Client) SetBoardAsHome(ctx context.Context, id string) error {
+	return c.do(ctx, "PATCH", "/api/boards/"+url.PathEscape(id)+"/home", struct{}{}, nil)
+}
+
+// SetBoardAsMobileHome is SetBoardAsHome for the mobile home board.
+func (c *Client) SetBoardAsMobileHome(ctx context.Context, id string) error {
+	return c.do(ctx, "PATCH", "/api/boards/"+url.PathEscape(id)+"/mobile-home", struct{}{}, nil)
+}
+
 // UpdateBoardSettings applies a partial settings patch to a board.
 func (c *Client) UpdateBoardSettings(ctx context.Context, id string, settings BoardSettings) error {
 	return c.do(ctx, "PATCH", "/api/boards/"+url.PathEscape(id)+"/settings", settings, nil)

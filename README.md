@@ -9,10 +9,13 @@ Built and verified against **Homarr 1.76.2**.
 
 Homarr has two APIs. The REST surface under `/api/…` is documented with OpenAPI
 and intended for external use; the tRPC surface under `/api/trpc/…` is an
-implementation detail of the web UI. Only six of Homarr's routers are exported
-through REST — `app`, `board`, `info`, `invite`, `serverSettings` and `user`
-(see [`packages/api/src/open-api.ts`](https://github.com/homarr-labs/homarr/blob/dev/packages/api/src/open-api.ts))
-— and this provider is deliberately limited to those.
+implementation detail of the web UI. Only a handful of Homarr's routers are
+exported through REST (see
+[`packages/api/src/open-api.ts`](https://github.com/homarr-labs/homarr/blob/dev/packages/api/src/open-api.ts)):
+`app`, `board`, `info`, `invite`, `serverSettings` and `user`, joined since 2.x by
+two admin-only odds and ends — `integration` (an outbound request proxy and a
+connection test) and `certificates` (2.2.0). This provider covers the first six;
+the latter two are imperative calls rather than declarative state.
 
 Consequently there is **no support for integrations, groups or board layouts**.
 Those exist only over tRPC, which uses superjson-encoded payloads and changes
@@ -33,7 +36,7 @@ the upstream discussion.
 | Resource | Lifecycle | Notes |
 | --- | --- | --- |
 | `homarr_app` | full CRUD | Round-trips cleanly; drift detected on every attribute |
-| `homarr_board` | create, read, rename, visibility, delete | `column_count` is create-only |
+| `homarr_board` | create, read, rename, visibility, home boards, delete | `column_count` is create-only; `is_home`/`is_mobile_home` are set-only |
 | `homarr_board_settings` | write-only | Homarr has no `GET` for these; drift is undetectable |
 | `homarr_user` | create, read, password, home boards, delete | `group_ids` and `email` are create-only |
 | `homarr_invite` | create, read, delete | `token` returned once, at creation |
@@ -54,6 +57,13 @@ These follow from the API, not from the provider's design:
   but there is no matching `GET`. `homarr_board_settings` therefore records what
   Terraform last applied. Changes made in the UI are not reverted until something
   in the configuration changes, and removing an attribute does not reset it.
+* **A home board can be selected but never cleared.** `PATCH /api/boards/{id}/home`
+  sets the calling user's home board; Homarr has no call that unsets it. So
+  `homarr_board`'s `is_home` and `is_mobile_home` accept `true` and reject an
+  explicit `false`, and leaving them out keeps them computed. They are also a
+  per-user singleton, so setting one board's flag silently clears another's —
+  declaring `is_home = true` on two boards makes them fight on every apply. To
+  clear a slot outright, set `homarr_user.home_board_id` to `null`.
 * **A board's column count is never reported.** It lives on the board's layout,
   which is tRPC-only. Changing it forces replacement, and import needs a
   composite id: `terraform import homarr_board.x <id>,<column_count>`.
