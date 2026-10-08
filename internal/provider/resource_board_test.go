@@ -142,26 +142,29 @@ resource "homarr_board" "second" {
 					resource.TestCheckResourceAttr("homarr_board.second", "is_mobile_home", "true"),
 				),
 			},
-		},
-	})
+			{
+				// Clearing goes through PATCH /api/users/preferences, which is
+				// the only way to unset a home board; the board-side endpoint
+				// can only select one.
+				Config: providerConfig + `
+resource "homarr_board" "first" {
+  name         = "tfacchomeone"
+  column_count = 10
+  is_public    = true
 }
 
-func TestAccBoardResource_rejectsHomeFalse(t *testing.T) {
-	resource.Test(t, resource.TestCase{
-		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-		Steps: []resource.TestStep{
-			{
-				// Homarr cannot clear a home board, so the provider refuses an
-				// explicit false at plan time rather than ignoring it.
-				Config: providerConfig + `
-resource "homarr_board" "test" {
-  name         = "tfacchomefalse"
-  column_count = 10
-  is_home      = false
+resource "homarr_board" "second" {
+  name           = "tfacchometwo"
+  column_count   = 10
+  is_public      = true
+  is_home        = false
+  is_mobile_home = false
 }
 `,
-				ExpectError: regexpMustCompile(`never unselect one`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("homarr_board.second", "is_home", "false"),
+					resource.TestCheckResourceAttr("homarr_board.second", "is_mobile_home", "false"),
+				),
 			},
 		},
 	})

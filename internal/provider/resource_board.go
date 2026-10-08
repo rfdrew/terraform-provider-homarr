@@ -26,42 +26,6 @@ import (
 // ASCII letters, digits, hyphens and underscores.
 var boardNamePattern = regexp.MustCompile(`^[A-Za-z0-9-_]+$`)
 
-// setOnlyBoolValidator rejects an explicit `false`.
-//
-// The home-board flags can only ever be turned on: Homarr exposes
-// PATCH /api/boards/{id}/home but nothing that clears the flag from the board
-// side. Allowing `false` in a configuration would mean either silently ignoring
-// it or failing during apply with the framework's generic "provider produced
-// inconsistent result" error, so it is rejected at plan time with an
-// explanation instead. Omitting the attribute leaves it computed, which is how
-// a board that is not the home board is expressed.
-type setOnlyBoolValidator struct {
-	clearWith string
-}
-
-func (v setOnlyBoolValidator) Description(_ context.Context) string {
-	return "must be true if set; omit the attribute instead of setting it to false"
-}
-
-func (v setOnlyBoolValidator) MarkdownDescription(ctx context.Context) string {
-	return v.Description(ctx)
-}
-
-func (v setOnlyBoolValidator) ValidateBool(_ context.Context, req validator.BoolRequest, resp *validator.BoolResponse) {
-	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() || req.ConfigValue.ValueBool() {
-		return
-	}
-	resp.Diagnostics.AddAttributeError(
-		req.Path,
-		"Attribute cannot be set to false",
-		"Homarr can only select a home board, never unselect one: the REST API offers "+
-			"PATCH /api/boards/{id}/home but no call that clears it.\n\n"+
-			"Remove the attribute from the configuration to stop managing it — it stays computed and "+
-			"reports whatever Homarr has. To move the flag, set it to true on another homarr_board; to "+
-			"clear it outright, set "+v.clearWith+" to null.",
-	)
-}
-
 var (
 	_ resource.Resource                = &boardResource{}
 	_ resource.ResourceWithConfigure   = &boardResource{}
@@ -156,29 +120,22 @@ func (r *boardResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 				Optional: true,
 				Computed: true,
 				MarkdownDescription: "Whether this board is the desktop home board of the user behind the " +
-					"API key. Set it to `true` to select this board; leave it out to report whatever " +
-					"Homarr has.\n\n" +
+					"API key. Leave it out to report whatever Homarr has.\n\n" +
 					"The home board is a per-user singleton, so selecting one board deselects whichever " +
 					"board held the flag before. Declaring `is_home = true` on two boards makes them " +
 					"fight over it on every apply. The board that loses the flag is not re-read during " +
 					"that apply, so its state reports `true` until the next refresh.\n\n" +
-					"~> **Note** This cannot be set to `false` — Homarr has no REST call that clears a " +
-					"home board. Move it by setting `is_home = true` elsewhere, or clear it with " +
-					"`homarr_user.home_board_id = null`.",
-				Validators: []validator.Bool{
-					setOnlyBoolValidator{clearWith: "`homarr_user.home_board_id`"},
-				},
+					"~> **Setting this to `false` requires Homarr 2.3.0 or newer.** Clearing a home board " +
+					"goes through `PATCH /api/users/preferences`, which arrived in 2.3.0; before that " +
+					"Homarr could only ever select one. Homarr also refuses to make a board private while " +
+					"it is the *instance-wide* home board set through `homarr_server_board_settings`.",
 			},
 			"is_mobile_home": schema.BoolAttribute{
 				Optional: true,
 				Computed: true,
 				MarkdownDescription: "Whether this board is the mobile home board of the user behind the " +
-					"API key. Behaves exactly like `is_home`, against Homarr's separate mobile slot, and is " +
-					"subject to the same set-only restriction. Unlike `is_home` it is never assigned " +
-					"automatically.",
-				Validators: []validator.Bool{
-					setOnlyBoolValidator{clearWith: "`homarr_user.mobile_home_board_id`"},
-				},
+					"API key. Behaves exactly like `is_home`, against Homarr's separate mobile slot. " +
+					"Unlike `is_home` it is never assigned automatically.",
 			},
 		},
 	}
@@ -259,14 +216,29 @@ func boolSelected(value types.Bool) bool {
 	return !value.IsNull() && !value.IsUnknown() && value.ValueBool()
 }
 
-// applyHomeFlags selects the board as desktop and/or mobile home board when the
-// plan asks for it and the prior state did not already have it.
+// boolCleared is boolSelected's mirror: a known, non-null false, meaning the
+// configuration explicitly asked for the flag to be off rather than omitting it.
+func boolCleared(value types.Bool) bool {
+	return !value.IsNull() && !value.IsUnknown() && !value.ValueBool()
+}
+
+// applyHomeFlags selects or clears the board as desktop and/or mobile home
+// board, when the plan differs from the prior state.
 //
-// Both endpoints are set-only and idempotent, and both are per-user: they write
-// the home board of the user behind the API key, which is also what
+// Selecting uses PATCH /api/boards/{id}/home, which is set-only and per-user:
+// it writes the home board of the user behind the API key, which is also what
 // GET /api/boards reports back in isHome/isMobileHome.
+//
+// Clearing has no board-side endpoint and goes through
+// PATCH /api/users/preferences with an explicit null, added in Homarr 2.3.0.
+// It is attempted only when the prior state says this board actually holds the
+// flag — clearing unconditionally would unset whichever other board currently
+// holds the per-user singleton.
 func (r *boardResource) applyHomeFlags(ctx context.Context, id string, plan, state boardModel, diags *diag.Diagnostics) {
-	if boolSelected(plan.IsHome) && !state.IsHome.ValueBool() {
+	clear := client.UserPreferencesPatch{}
+
+	switch {
+	case boolSelected(plan.IsHome) && !state.IsHome.ValueBool():
 		if err := r.client.SetBoardAsHome(ctx, id); err != nil {
 			diags.AddAttributeError(
 				path.Root("is_home"),
@@ -274,8 +246,12 @@ func (r *boardResource) applyHomeFlags(ctx context.Context, id string, plan, sta
 				"Homarr requires view access to a board before it can become a home board. "+err.Error(),
 			)
 		}
+	case boolCleared(plan.IsHome) && state.IsHome.ValueBool():
+		clear["homeBoardId"] = nil
 	}
-	if boolSelected(plan.IsMobileHome) && !state.IsMobileHome.ValueBool() {
+
+	switch {
+	case boolSelected(plan.IsMobileHome) && !state.IsMobileHome.ValueBool():
 		if err := r.client.SetBoardAsMobileHome(ctx, id); err != nil {
 			diags.AddAttributeError(
 				path.Root("is_mobile_home"),
@@ -283,6 +259,17 @@ func (r *boardResource) applyHomeFlags(ctx context.Context, id string, plan, sta
 				"Homarr requires view access to a board before it can become a home board. "+err.Error(),
 			)
 		}
+	case boolCleared(plan.IsMobileHome) && state.IsMobileHome.ValueBool():
+		clear["mobileHomeBoardId"] = nil
+	}
+
+	if len(clear) == 0 {
+		return
+	}
+	if _, err := r.client.UpdateUserPreferences(ctx, "", clear); err != nil {
+		detail := "Clearing a home board needs PATCH /api/users/preferences, which Homarr added in 2.3.0. " +
+			"On an older release, move the flag to another board instead of removing it. " + err.Error()
+		diags.AddError("Unable to clear the Homarr home board", detail)
 	}
 }
 

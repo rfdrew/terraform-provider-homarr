@@ -8,6 +8,17 @@
 # through the tRPC endpoints the UI itself uses, then signs in with NextAuth and
 # mints an API key.
 #
+# Targets Homarr 2.x. Its onboarding differs from 1.x in three ways that this
+# script has to honour:
+#
+#   * every mutation is claim-gated. POST /api/onboarding/claim issues a
+#     `homarr-onboarding-claim` cookie, and the claim stops authorising as soon
+#     as the first user exists — so the admin signs in mid-walk and the rest of
+#     the steps ride on that session.
+#   * the steps collapsed to start -> user -> group -> setup -> finish.
+#   * serverSettings.initSettings and onboard.setupIntegrations are gone,
+#     replaced by onboard.completeSetup, which needs a real payload.
+#
 # Usage:
 #   eval "$(scripts/bootstrap-test-homarr.sh)"     # exports HOMARR_URL/HOMARR_API_KEY
 #   scripts/bootstrap-test-homarr.sh --teardown    # removes the container
@@ -16,7 +27,7 @@
 set -euo pipefail
 
 CONTAINER="${HOMARR_TEST_CONTAINER:-homarr-tfprovider-test}"
-IMAGE="${HOMARR_TEST_IMAGE:-ghcr.io/homarr-labs/homarr:v1.76.2}"
+IMAGE="${HOMARR_TEST_IMAGE:-ghcr.io/homarr-labs/homarr:v2.3.0}"
 PORT="${HOMARR_TEST_PORT:-7575}"
 BASE="http://localhost:${PORT}"
 USERNAME="tfadmin"
@@ -63,16 +74,39 @@ if [[ "$(curl -fsS -o /dev/null -w '%{http_code}' -m 5 "$BASE/api/health/live" 2
   exit 1
 fi
 
+# One cookie jar carries the onboarding claim first and the admin session after.
+COOKIES="$(mktemp)"
+trap 'rm -f "$COOKIES"' EXIT
+
 trpc() {
-  curl -fsS -m 30 -X POST "$BASE/api/trpc/$1" \
+  curl -fsS -m 30 -b "$COOKIES" -c "$COOKIES" -X POST "$BASE/api/trpc/$1" \
     -H 'Content-Type: application/json' \
     -d "$2" >/dev/null
 }
 
 current_step() {
-  curl -fsS -m 30 "$BASE/api/trpc/onboard.currentStep" |
+  curl -fsS -m 30 -b "$COOKIES" -c "$COOKIES" "$BASE/api/trpc/onboard.currentStep" |
     python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["data"]["json"]["current"])'
 }
+
+sign_in() {
+  CSRF="$(curl -fsS -b "$COOKIES" -c "$COOKIES" "$BASE/api/auth/csrf" |
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["csrfToken"])')"
+  curl -fsS -b "$COOKIES" -c "$COOKIES" -o /dev/null \
+    -X POST "$BASE/api/auth/callback/credentials" \
+    -H 'Content-Type: application/x-www-form-urlencoded' \
+    --data-urlencode "csrfToken=$CSRF" \
+    --data-urlencode "name=$USERNAME" \
+    --data-urlencode "password=$PASSWORD" \
+    --data-urlencode "callbackUrl=$BASE" \
+    --data-urlencode "json=true"
+}
+
+# Claim the onboarding session. 409 means it is already finished, which is fine
+# when re-running against a container that was onboarded earlier.
+claim_status="$(curl -fsS -o /dev/null -w '%{http_code}' -m 30 \
+  -b "$COOKIES" -c "$COOKIES" -X POST "$BASE/api/onboarding/claim" 2>/dev/null || true)"
+log "onboarding claim: HTTP ${claim_status:-none}"
 
 # The onboarding steps are a state machine; each mutation advances it. Skip any
 # step the instance has already passed so the script is safe to re-run.
@@ -91,35 +125,28 @@ if [[ "$step" == "user" ]]; then
   step="$(current_step)"
 fi
 
-if [[ "$step" == "settings" ]]; then
-  trpc serverSettings.initSettings \
-    '{"json":{"analytics":{"enableGeneral":false},"crawlingAndIndexing":{"noIndex":true,"noFollow":true,"noTranslate":true,"noSiteLinksSearchBox":true}}}'
+# From here the claim cookie no longer authorises anything: a user now exists,
+# so the remaining steps need a real admin session.
+log "signing in as $USERNAME"
+sign_in
+
+if [[ "$step" == "group" ]]; then
+  trpc onboard.nextStep '{"json":{}}'
   step="$(current_step)"
 fi
 
-if [[ "$step" == "integrations" ]]; then
-  trpc onboard.setupIntegrations '{"json":{}}'
+if [[ "$step" == "setup" ]]; then
+  log "completing setup"
+  trpc onboard.completeSetup '{"json":{"server":{"defaultLocale":"en","defaultColorScheme":"auto","analyticsEnabled":false},"board":{"name":"home","primaryColor":"#fa5252","secondaryColor":"#fd7e14","itemRadius":"lg"}}}'
   step="$(current_step)"
 fi
 
 log "onboarding finished at step: $step"
-
-# API keys can only be minted by an authenticated session, so sign in through
-# NextAuth's credentials callback and keep the session cookie.
-COOKIES="$(mktemp)"
-trap 'rm -f "$COOKIES"' EXIT
-
-CSRF="$(curl -fsS -c "$COOKIES" "$BASE/api/auth/csrf" |
-  python3 -c 'import json,sys; print(json.load(sys.stdin)["csrfToken"])')"
-
-curl -fsS -b "$COOKIES" -c "$COOKIES" -o /dev/null \
-  -X POST "$BASE/api/auth/callback/credentials" \
-  -H 'Content-Type: application/x-www-form-urlencoded' \
-  --data-urlencode "csrfToken=$CSRF" \
-  --data-urlencode "name=$USERNAME" \
-  --data-urlencode "password=$PASSWORD" \
-  --data-urlencode "callbackUrl=$BASE" \
-  --data-urlencode "json=true"
+if [[ "$step" != "finish" ]]; then
+  log "onboarding did not reach \"finish\"; container logs follow"
+  docker logs --tail 50 "$CONTAINER" >&2
+  exit 1
+fi
 
 API_KEY="$(curl -fsS -b "$COOKIES" -X POST "$BASE/api/trpc/apiKeys.create" \
   -H 'Content-Type: application/json' -d '{"json":{}}' |
