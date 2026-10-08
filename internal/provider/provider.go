@@ -194,6 +194,7 @@ func (p *homarrProvider) Resources(_ context.Context) []func() resource.Resource
 		NewBoardResource,
 		NewBoardSettingsResource,
 		NewUserResource,
+		NewUserPreferencesResource,
 		NewInviteResource,
 		NewServerBoardSettingsResource,
 	}
@@ -205,6 +206,7 @@ func (p *homarrProvider) DataSources(_ context.Context) []func() datasource.Data
 		NewAppsDataSource,
 		NewBoardDataSource,
 		NewBoardsDataSource,
+		NewBoardSettingsDataSource,
 		NewUsersDataSource,
 		NewInfoDataSource,
 	}

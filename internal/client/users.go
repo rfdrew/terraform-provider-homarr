@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -24,6 +25,8 @@ type UserDetail struct {
 	EmailVerified             *string `json:"emailVerified"`
 	Image                     *string `json:"image"`
 	Provider                  string  `json:"provider"`
+	ColorScheme               string  `json:"colorScheme"`
+	ByteUnitSystem            string  `json:"byteUnitSystem"`
 	HomeBoardID               *string `json:"homeBoardId"`
 	MobileHomeBoardID         *string `json:"mobileHomeBoardId"`
 	FirstDayOfWeek            int64   `json:"firstDayOfWeek"`
@@ -45,6 +48,80 @@ type UserCreateRequest struct {
 	ConfirmPassword string   `json:"confirmPassword"`
 	Email           *string  `json:"email,omitempty"`
 	GroupIDs        []string `json:"groupIds"`
+}
+
+// UserPreferences is the shape of GET and PATCH /api/users/preferences, added
+// in Homarr 2.3.0. Both verbs return it in full.
+//
+// headerPreferences is kept as raw JSON: it is a versioned, deeply nested
+// object that Homarr rewrites on write (it re-appends required items), so it
+// cannot round-trip through a flat Terraform attribute and the provider only
+// passes it through.
+type UserPreferences struct {
+	UserID                    string          `json:"userId"`
+	ColorScheme               string          `json:"colorScheme"`
+	ByteUnitSystem            string          `json:"byteUnitSystem"`
+	FirstDayOfWeek            int64           `json:"firstDayOfWeek"`
+	PingIconsEnabled          bool            `json:"pingIconsEnabled"`
+	EnableRightClickOnWidgets bool            `json:"enableRightClickOnWidgets"`
+	HomeBoardID               *string         `json:"homeBoardId"`
+	MobileHomeBoardID         *string         `json:"mobileHomeBoardId"`
+	DefaultSearchEngineID     *string         `json:"defaultSearchEngineId"`
+	OpenSearchInNewTab        bool            `json:"openSearchInNewTab"`
+	DdgBangs                  bool            `json:"ddgBangs"`
+	HeaderPreferences         json.RawMessage `json:"headerPreferences,omitempty"`
+}
+
+// UserPreferencesPatch is a partial update to a user's preferences.
+//
+// It is a map rather than a struct on purpose: homeBoardId, mobileHomeBoardId
+// and defaultSearchEngineId are nullable references where an explicit null
+// clears the value and an omitted key leaves it alone. A struct with
+// `omitempty` cannot express that difference, and one without it would clear
+// every field the caller did not set.
+type UserPreferencesPatch map[string]any
+
+// GetUserPreferences reads a user's preferences. An empty userID means the user
+// behind the API key; naming another user requires admin.
+//
+// Requires Homarr 2.3.0 or newer.
+func (c *Client) GetUserPreferences(ctx context.Context, userID string) (*UserPreferences, error) {
+	path := "/api/users/preferences"
+	if userID != "" {
+		path += "?userId=" + url.QueryEscape(userID)
+	}
+	var prefs UserPreferences
+	if err := c.do(ctx, "GET", path, nil, &prefs); err != nil {
+		return nil, err
+	}
+	return &prefs, nil
+}
+
+// UpdateUserPreferences applies a partial patch and returns the preferences as
+// stored afterwards. An empty userID targets the user behind the API key.
+//
+// Homarr rejects an empty patch with a 400 ("Supply at least one preference"),
+// so callers must skip the call when nothing changed. Every supplied value is
+// validated before a single write, making the call atomic.
+//
+// Requires Homarr 2.3.0 or newer.
+func (c *Client) UpdateUserPreferences(ctx context.Context, userID string, patch UserPreferencesPatch) (*UserPreferences, error) {
+	if len(patch) == 0 {
+		return nil, fmt.Errorf("refusing to send an empty preferences patch: Homarr requires at least one field")
+	}
+	body := make(map[string]any, len(patch)+1)
+	for k, v := range patch {
+		body[k] = v
+	}
+	if userID != "" {
+		body["userId"] = userID
+	}
+
+	var prefs UserPreferences
+	if err := c.do(ctx, "PATCH", "/api/users/preferences", body, &prefs); err != nil {
+		return nil, err
+	}
+	return &prefs, nil
 }
 
 // ListUsers returns every user. Requires an admin API key.

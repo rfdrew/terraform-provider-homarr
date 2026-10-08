@@ -142,6 +142,17 @@ func IsConflict(err error) bool {
 	return false
 }
 
+// IsForbidden reports whether err is a 403 from Homarr. Homarr 2.0.0 narrowed
+// GET /api/apps to the app-modify-all permission, so a scoped key that used to
+// list apps now gets this.
+func IsForbidden(err error) bool {
+	var apiErr *Error
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode == http.StatusForbidden
+	}
+	return false
+}
+
 type trpcErrorEnvelope struct {
 	Message string `json:"message"`
 	Code    string `json:"code"`

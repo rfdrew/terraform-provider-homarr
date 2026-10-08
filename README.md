@@ -3,7 +3,7 @@
 A Terraform provider for [Homarr](https://homarr.dev), managed through Homarr's
 OpenAPI-compatible REST API.
 
-Built and verified against **Homarr 1.76.2**.
+Built and verified against **Homarr 2.3.0**.
 
 ## Why the surface is small
 
@@ -22,12 +22,13 @@ Those exist only over tRPC, which uses superjson-encoded payloads and changes
 freely between releases; building resources on it would produce a provider that
 breaks on every Homarr upgrade.
 
-**Board items (the tiles on a board) are a special case.** Creating one *is*
-available over REST — `POST /api/boards/items` adds a widget or app tile and
-returns its id. But there is no endpoint to list, update, move, resize or delete
-an item, so a tile can be created and then never reconciled. A Terraform resource
-built on create-only semantics could only ever add tiles to a board, never
-converge on a desired state, so this provider leaves the capability out. See
+**Board items (the tiles on a board) are a special case.** Homarr 2.3.0 added
+`PUT /api/boards/{id}/content`, which writes a board's sections and items
+declaratively in one idempotent call — but still offers no way to read them
+back. A Terraform resource needs a read to refresh and detect drift, and the
+write deletes any section or item the payload omits, so a stale state file
+would wipe the board rather than converge on it. The capability is therefore
+still left out. See
 [homarr-labs/homarr#6435](https://github.com/homarr-labs/homarr/issues/6435) for
 the upstream discussion.
 
@@ -36,9 +37,10 @@ the upstream discussion.
 | Resource | Lifecycle | Notes |
 | --- | --- | --- |
 | `homarr_app` | full CRUD | Round-trips cleanly; drift detected on every attribute |
-| `homarr_board` | create, read, rename, visibility, home boards, delete | `column_count` is create-only; `is_home`/`is_mobile_home` are set-only |
-| `homarr_board_settings` | write-only | Homarr has no `GET` for these; drift is undetectable |
-| `homarr_user` | create, read, password, home boards, delete | `group_ids` and `email` are create-only |
+| `homarr_board` | create, read, rename, visibility, home boards, delete | `column_count` is create-only; clearing a home board needs 2.3.0 |
+| `homarr_board_settings` | full CRUD | Readable since Homarr 2.3.0; reading needs *modify* access |
+| `homarr_user` | create, read, password, preferences, delete | `group_ids` and `email` are create-only |
+| `homarr_user_preferences` | read, update (attaches to an existing user) | For LDAP/OIDC and UI-made accounts |
 | `homarr_invite` | create, read, delete | `token` returned once, at creation |
 | `homarr_server_board_settings` | read, update (singleton) | Instance-wide board defaults |
 
@@ -46,6 +48,7 @@ the upstream discussion.
 | --- | --- |
 | `homarr_app` / `homarr_apps` | Look up one app by id or name, or list them all |
 | `homarr_board` / `homarr_boards` | Look up one board by id or name, or list them all |
+| `homarr_board_settings` | Read one board's appearance settings |
 | `homarr_users` | List users, e.g. to resolve an id without importing the account |
 | `homarr_info` | Report the Homarr version |
 
@@ -53,20 +56,16 @@ the upstream discussion.
 
 These follow from the API, not from the provider's design:
 
-* **Board settings cannot be read back.** `PATCH /api/boards/{id}/settings` exists
-  but there is no matching `GET`. `homarr_board_settings` therefore records what
-  Terraform last applied. Changes made in the UI are not reverted until something
-  in the configuration changes, and removing an attribute does not reset it.
-* **A home board can be selected but never cleared.** `PATCH /api/boards/{id}/home`
-  sets the calling user's home board; Homarr has no call that unsets it. So
-  `homarr_board`'s `is_home` and `is_mobile_home` accept `true` and reject an
-  explicit `false`, and leaving them out keeps them computed. They are also a
-  per-user singleton, so setting one board's flag silently clears another's —
-  declaring `is_home = true` on two boards makes them fight on every apply. To
-  clear a slot outright, set `homarr_user.home_board_id` to `null`.
-* **A board's column count is never reported.** It lives on the board's layout,
-  which is tRPC-only. Changing it forces replacement, and import needs a
-  composite id: `terraform import homarr_board.x <id>,<column_count>`.
+* **A board's column count is never reported.** It lives on the board's layout.
+  Homarr 2.3.0 added `PUT /api/boards/{id}/layouts`, but nothing reads layouts
+  back and the endpoint is unusable from a REST-only client anyway — it demands
+  the full layout array including the mobile layout's id, which no REST call
+  returns. Changing `column_count` still forces replacement, and import still
+  needs a composite id: `terraform import homarr_board.x <id>,<column_count>`.
+* **Board tiles are still unmanageable.** `PUT /api/boards/{id}/content` can
+  write a whole board declaratively, but no endpoint reads sections or items
+  back, so a resource could never converge — and because omitted sections are
+  deleted, a stale state file would wipe the board.
 * **`PATCH` on apps is a full replace.** Every field is required-but-nullable, so
   the provider always sends all of them.
 * **Creating a user returns an empty body.** The provider recovers the new id by
@@ -78,6 +77,24 @@ These follow from the API, not from the provider's design:
 * **Group membership is invisible.** `group_ids` is applied at creation and then
   forces replacement, because the provider cannot read it back.
 * **Invite tokens are returned once.** An imported invite has a null `token`.
+* **Listing apps needs the `app-modify-all` permission** since Homarr 2.0.0,
+  because the full catalogue exposes internal URLs. The provider falls back to
+  `GET /api/apps/selectable`, which any authenticated key may call and which
+  returns the same fields, so a scoped key keeps working.
+* **Groups, integrations, search engines and API keys have no REST surface** and
+  cannot be managed here. Certificates have create and read but no delete.
+
+### Requires Homarr 2.3.0
+
+Most of the provider works against much older releases, but these need 2.3.0,
+which added `GET /api/boards/{id}/settings` and the `/api/users/preferences`
+pair:
+
+* drift detection for `homarr_board_settings` and the `homarr_board_settings`
+  data source — against an older Homarr the resource degrades to its previous
+  write-only behaviour and says so in a warning;
+* setting `is_home` or `is_mobile_home` to `false`, which clears a home board;
+* the preference attributes on `homarr_user`, and `homarr_user_preferences`.
 
 ## Usage
 

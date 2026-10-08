@@ -43,21 +43,64 @@ type BoardCreateRequest struct {
 // omitted when nil. There is deliberately no matching read method: Homarr has
 // no GET for per-board settings, only the tRPC-only full board query.
 type BoardSettings struct {
-	PageTitle                 *string  `json:"pageTitle,omitempty"`
-	MetaTitle                 *string  `json:"metaTitle,omitempty"`
-	LogoImageURL              *string  `json:"logoImageUrl,omitempty"`
-	FaviconImageURL           *string  `json:"faviconImageUrl,omitempty"`
-	BackgroundImageURL        *string  `json:"backgroundImageUrl,omitempty"`
-	BackgroundImageAttachment *string  `json:"backgroundImageAttachment,omitempty"`
-	BackgroundImageRepeat     *string  `json:"backgroundImageRepeat,omitempty"`
-	BackgroundImageSize       *string  `json:"backgroundImageSize,omitempty"`
-	PrimaryColor              *string  `json:"primaryColor,omitempty"`
-	SecondaryColor            *string  `json:"secondaryColor,omitempty"`
-	Opacity                   *float64 `json:"opacity,omitempty"`
-	IconColor                 *string  `json:"iconColor,omitempty"`
-	ItemRadius                *string  `json:"itemRadius,omitempty"`
-	CustomCSS                 *string  `json:"customCss,omitempty"`
-	DisableStatus             *bool    `json:"disableStatus,omitempty"`
+	PageTitle                 *string `json:"pageTitle,omitempty"`
+	MetaTitle                 *string `json:"metaTitle,omitempty"`
+	LogoImageURL              *string `json:"logoImageUrl,omitempty"`
+	FaviconImageURL           *string `json:"faviconImageUrl,omitempty"`
+	BackgroundImageURL        *string `json:"backgroundImageUrl,omitempty"`
+	BackgroundImageAttachment *string `json:"backgroundImageAttachment,omitempty"`
+	BackgroundImageRepeat     *string `json:"backgroundImageRepeat,omitempty"`
+	BackgroundImageSize       *string `json:"backgroundImageSize,omitempty"`
+	PrimaryColor              *string `json:"primaryColor,omitempty"`
+	SecondaryColor            *string `json:"secondaryColor,omitempty"`
+	Opacity                   *int64  `json:"opacity,omitempty"`
+	IconColor                 *string `json:"iconColor,omitempty"`
+	ItemRadius                *string `json:"itemRadius,omitempty"`
+	CustomCSS                 *string `json:"customCss,omitempty"`
+	DisableStatus             *bool   `json:"disableStatus,omitempty"`
+}
+
+// BoardSettingsRead is the shape returned by GET /api/boards/{id}/settings,
+// added in Homarr 2.3.0.
+//
+// It is the write schema made total: every field PATCH accepts is present, plus
+// the board's id and name. Six of the text fields round-trip as null — the
+// handler coalesces them to "" but the output schema transforms empty strings
+// back to null — while customCss is not nullable, so a board with no custom CSS
+// reports "" rather than null.
+type BoardSettingsRead struct {
+	ID                        string  `json:"id"`
+	Name                      string  `json:"name"`
+	PageTitle                 *string `json:"pageTitle"`
+	MetaTitle                 *string `json:"metaTitle"`
+	LogoImageURL              *string `json:"logoImageUrl"`
+	FaviconImageURL           *string `json:"faviconImageUrl"`
+	BackgroundImageURL        *string `json:"backgroundImageUrl"`
+	BackgroundImageAttachment string  `json:"backgroundImageAttachment"`
+	BackgroundImageRepeat     string  `json:"backgroundImageRepeat"`
+	BackgroundImageSize       string  `json:"backgroundImageSize"`
+	PrimaryColor              string  `json:"primaryColor"`
+	SecondaryColor            string  `json:"secondaryColor"`
+	Opacity                   float64 `json:"opacity"`
+	IconColor                 *string `json:"iconColor"`
+	ItemRadius                string  `json:"itemRadius"`
+	CustomCSS                 string  `json:"customCss"`
+	DisableStatus             bool    `json:"disableStatus"`
+}
+
+// GetBoardSettings reads a board's settings.
+//
+// Requires modify access to the board, not merely view. Homarr deliberately
+// answers 404 for a board that exists but is not visible to the caller, so a
+// NotFound here can mean either absent or forbidden.
+//
+// Requires Homarr 2.3.0 or newer; older releases have no GET for these.
+func (c *Client) GetBoardSettings(ctx context.Context, id string) (*BoardSettingsRead, error) {
+	var settings BoardSettingsRead
+	if err := c.do(ctx, "GET", "/api/boards/"+url.PathEscape(id)+"/settings", nil, &settings); err != nil {
+		return nil, err
+	}
+	return &settings, nil
 }
 
 // ListBoards returns every board visible to the API key.
