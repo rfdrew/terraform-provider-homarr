@@ -43,6 +43,9 @@ type Options struct {
 	Timeout time.Duration
 	// UserAgent is sent with every request.
 	UserAgent string
+	// Transport replaces the HTTP transport, and with it InsecureSkipVerify.
+	// Tests use it to answer requests in process instead of over a socket.
+	Transport http.RoundTripper
 }
 
 // New builds a Client from Options.
@@ -64,9 +67,13 @@ func New(opts Options) (*Client, error) {
 		timeout = 30 * time.Second
 	}
 
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if opts.InsecureSkipVerify {
-		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // opt-in
+	transport := opts.Transport
+	if transport == nil {
+		defaultTransport := http.DefaultTransport.(*http.Transport).Clone()
+		if opts.InsecureSkipVerify {
+			defaultTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // opt-in
+		}
+		transport = defaultTransport
 	}
 
 	ua := opts.UserAgent

@@ -5,7 +5,7 @@ subcategory: ""
 description: |-
   Manages a Homarr board — a dashboard page.
   A new board is created with one empty section and one layout, exactly as the Homarr UI does. The widgets and app tiles placed on a board are not manageable here. Homarr can create an item over REST (POST /api/boards/items) but offers no way to list, update, move, resize or delete one, and the board's layout is tRPC-only — not enough to reconcile tiles declaratively.
-  ~> Note Homarr makes the first board a user creates their home board automatically, so is_home can come back true on a board that never asked for it. is_home and is_mobile_home are the home boards of the user behind the API key; the instance-wide defaults live in homarr_server_board_settings.
+  ~> Note Homarr makes a new board its creator's desktop home board whenever that user has none selected — not only the first board, and again after is_home = false cleared the slot — so is_home can come back true on a board that never asked for it. Declaring is_home = false clears that again right after creation. is_home and is_mobile_home are the home boards of the user behind the API key; the instance-wide defaults live in homarr_server_board_settings.
 ---
 
 # homarr_board (Resource)
@@ -14,7 +14,7 @@ Manages a Homarr board — a dashboard page.
 
 A new board is created with one empty section and one layout, exactly as the Homarr UI does. The widgets and app tiles placed *on* a board are not manageable here. Homarr can create an item over REST (`POST /api/boards/items`) but offers no way to list, update, move, resize or delete one, and the board's layout is tRPC-only — not enough to reconcile tiles declaratively.
 
-~> **Note** Homarr makes the first board a user creates their home board automatically, so `is_home` can come back `true` on a board that never asked for it. `is_home` and `is_mobile_home` are the home boards *of the user behind the API key*; the instance-wide defaults live in `homarr_server_board_settings`.
+~> **Note** Homarr makes a new board its creator's desktop home board whenever that user has none selected — not only the first board, and again after `is_home = false` cleared the slot — so `is_home` can come back `true` on a board that never asked for it. Declaring `is_home = false` clears that again right after creation. `is_home` and `is_mobile_home` are the home boards *of the user behind the API key*; the instance-wide defaults live in `homarr_server_board_settings`.
 
 ## Example Usage
 
@@ -34,9 +34,8 @@ resource "homarr_board" "public_status" {
 }
 
 # is_home and is_mobile_home select the home board of the user behind the API
-# key. They can only be turned on — Homarr has no call that clears a home board
-# — so to move the flag you set it on another board, and to drop it entirely you
-# set homarr_user.home_board_id to null.
+# key. Setting one to false clears that slot again (Homarr 2.3.0 or newer); to
+# move the flag, set it on another board instead.
 resource "homarr_board" "landing" {
   name           = "landing"
   column_count   = 10
@@ -58,12 +57,12 @@ resource "homarr_board" "landing" {
 
 ### Optional
 
-- `is_home` (Boolean) Whether this board is the desktop home board of the user behind the API key. Set it to `true` to select this board; leave it out to report whatever Homarr has.
+- `is_home` (Boolean) Whether this board is the desktop home board of the user behind the API key. Leave it out to report whatever Homarr has.
 
 The home board is a per-user singleton, so selecting one board deselects whichever board held the flag before. Declaring `is_home = true` on two boards makes them fight over it on every apply. The board that loses the flag is not re-read during that apply, so its state reports `true` until the next refresh.
 
-~> **Note** This cannot be set to `false` — Homarr has no REST call that clears a home board. Move it by setting `is_home = true` elsewhere, or clear it with `homarr_user.home_board_id = null`.
-- `is_mobile_home` (Boolean) Whether this board is the mobile home board of the user behind the API key. Behaves exactly like `is_home`, against Homarr's separate mobile slot, and is subject to the same set-only restriction. Unlike `is_home` it is never assigned automatically.
+~> **Setting this to `false` requires Homarr 2.3.0 or newer.** Clearing a home board goes through `PATCH /api/users/preferences`, which arrived in 2.3.0; before that Homarr could only ever select one. Homarr also refuses to make a board private while it is the *instance-wide* home board set through `homarr_server_board_settings`.
+- `is_mobile_home` (Boolean) Whether this board is the mobile home board of the user behind the API key. Behaves exactly like `is_home`, against Homarr's separate mobile slot. Unlike `is_home` it is never assigned automatically.
 - `is_public` (Boolean) Whether the board is visible without authentication. Defaults to `false`. Homarr refuses to make a board private while it is the *instance-wide* home board — the one set through `homarr_server_board_settings`, not the per-user `is_home`.
 
 ### Read-Only

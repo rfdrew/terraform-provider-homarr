@@ -4,22 +4,23 @@ page_title: "homarr_board_settings Resource - Homarr"
 subcategory: ""
 description: |-
   Manages the appearance and behaviour settings of a Homarr board.
-  ~> This resource is write-only. Homarr exposes PATCH /api/boards/{id}/settings but has no matching GET — per-board settings are only readable through its tRPC API. The provider therefore cannot refresh these values, and state reflects the last configuration Terraform applied rather than what the server currently holds. Practical consequences:
-  Changes made in the Homarr UI are not detected as drift and will not be reverted until   something in this resource's configuration changes.Removing an attribute from the configuration sends no reset — Homarr keeps the previously   applied value. Set the attribute to the value you want instead of deleting it.Destroying this resource is a no-op on the server; it only drops the resource from state.
-  Only attributes you actually set are sent, so this resource can coexist with settings managed elsewhere.
+  Every attribute is optional and computed: declare the ones you want to control and leave the rest alone. Undeclared attributes are refreshed from Homarr and never reverted, so this resource can coexist with settings managed in the UI or elsewhere.
+  ~> Requires Homarr 2.3.0 or newer for drift detection. GET /api/boards/{id}/settings arrived in 2.3.0. Against an older Homarr the provider cannot refresh these values and falls back to the previous behaviour — state reflects what Terraform last applied, and changes made in the UI are neither detected nor reverted. A warning is emitted when that happens.
+  ~> Note Reading settings requires modify access to the board, which is stricter than the view access needed to list it. Homarr deliberately answers 404 rather than 403 for a board you cannot reach, so a key that loses modify access looks the same as a deleted board; the provider re-checks the board itself before concluding it is gone.
+  Destroying this resource does not reset anything — board settings are columns on the board itself and disappear with it.
 ---
 
 # homarr_board_settings (Resource)
 
 Manages the appearance and behaviour settings of a Homarr board.
 
-~> **This resource is write-only.** Homarr exposes `PATCH /api/boards/{id}/settings` but has no matching `GET` — per-board settings are only readable through its tRPC API. The provider therefore cannot refresh these values, and state reflects the last configuration Terraform applied rather than what the server currently holds. Practical consequences:
+Every attribute is optional and computed: declare the ones you want to control and leave the rest alone. Undeclared attributes are refreshed from Homarr and never reverted, so this resource can coexist with settings managed in the UI or elsewhere.
 
-* Changes made in the Homarr UI are **not** detected as drift and will **not** be reverted until   something in this resource's configuration changes.
-* Removing an attribute from the configuration sends no reset — Homarr keeps the previously   applied value. Set the attribute to the value you want instead of deleting it.
-* Destroying this resource is a no-op on the server; it only drops the resource from state.
+~> **Requires Homarr 2.3.0 or newer for drift detection.** `GET /api/boards/{id}/settings` arrived in 2.3.0. Against an older Homarr the provider cannot refresh these values and falls back to the previous behaviour — state reflects what Terraform last applied, and changes made in the UI are neither detected nor reverted. A warning is emitted when that happens.
 
-Only attributes you actually set are sent, so this resource can coexist with settings managed elsewhere.
+~> **Note** Reading settings requires *modify* access to the board, which is stricter than the *view* access needed to list it. Homarr deliberately answers `404` rather than `403` for a board you cannot reach, so a key that loses modify access looks the same as a deleted board; the provider re-checks the board itself before concluding it is gone.
+
+Destroying this resource does not reset anything — board settings are columns on the board itself and disappear with it.
 
 ## Example Usage
 
@@ -30,9 +31,8 @@ resource "homarr_board" "infra" {
   is_public    = true
 }
 
-# Appearance and behaviour of a board. Note that this resource is write-only:
-# Homarr has no endpoint to read these values back, so changes made in the UI are
-# not detected as drift.
+# Appearance and behaviour of a board. Declared attributes are enforced; the
+# rest are read from Homarr (2.3.0 or newer) and left alone.
 resource "homarr_board_settings" "infra" {
   board_id = homarr_board.infra.id
 
@@ -81,7 +81,9 @@ resource "homarr_board_settings" "infra" {
 - `item_radius` (String) Corner radius of board items. One of `xs`, `sm`, `md`, `lg` or `xl`.
 - `logo_image_url` (String) URL of the logo shown in the board's header.
 - `meta_title` (String) Value of the page's `<meta>` title, used by link previews.
-- `opacity` (Number) Opacity of board items, from `0` to `100`.
+- `opacity` (Number) Opacity of board items, a whole number from `0` to `100`.
+
+~> **Note** This was a floating-point attribute before. Homarr's API accepts fractions, but its UI works in steps of 5 and declares the column as an integer, so the provider keeps to whole numbers. A fractional value set outside Terraform is reported truncated.
 - `page_title` (String) Title shown in the browser tab for this board.
 - `primary_color` (String) Primary accent colour as a six-digit hex value, e.g. `#fa5252`.
 - `secondary_color` (String) Secondary accent colour as a six-digit hex value, e.g. `#fd7e14`.

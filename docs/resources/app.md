@@ -55,14 +55,14 @@ resource "homarr_app" "services" {
 
 ### Required
 
-- `icon_url` (String) URL of the app's icon. Homarr ships a large icon repository; values such as `https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons@master/svg/grafana.svg` are typical.
-- `name` (String) Display name of the app. Between 1 and 64 characters.
+- `icon_url` (String) URL of the app's icon, with no leading or trailing whitespace. Homarr ships a large icon repository; values such as `https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons@master/svg/grafana.svg` are typical.
+- `name` (String) Display name of the app. Between 1 and 64 characters, with no leading or trailing whitespace, which Homarr would strip.
 
 ### Optional
 
-- `description` (String) Optional description shown in the Homarr UI. At most 512 characters. An empty string is stored as `null` by Homarr, so use `null` rather than `""` to keep plans clean.
-- `href` (String) URL or URI the app tile links to. Homarr 1.74.0 and later reject only `javascript:` URIs and accept everything else, including schemes written without `//` such as `mailto:`, and relative paths. Homarr 1.73.x additionally required an absolute `scheme://` URL.
-- `ping_url` (String) URL Homarr pings to show the app's online status. Must be `http://` or `https://`.
+- `description` (String) Optional description shown in the Homarr UI. At most 512 characters, with no leading or trailing whitespace. Leave it out, or set it to `null`, for no description; `""` is rejected because Homarr stores it as `null`.
+- `href` (String) URL or URI the app tile links to, with no leading or trailing whitespace. Homarr 1.74.0 and later reject only `javascript:` URIs and accept everything else, including schemes written without `//` such as `mailto:`, and relative paths. Homarr 1.73.x additionally required an absolute `scheme://` URL. Leave it out, or set it to `null`, for a tile that links nowhere; `""` is rejected because Homarr stores it as `null`.
+- `ping_url` (String) URL Homarr pings to show the app's online status. Must be `http://` or `https://`, with no leading or trailing whitespace. Leave it out, or set it to `null`, to have Homarr ping `href` instead; `""` is rejected because Homarr stores it as `null`.
 
 ### Read-Only
 

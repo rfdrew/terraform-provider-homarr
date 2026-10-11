@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"maps"
 	"regexp"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
@@ -22,9 +23,10 @@ import (
 var hexColorPattern = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
 
 var (
-	_ resource.Resource                = &boardSettingsResource{}
-	_ resource.ResourceWithConfigure   = &boardSettingsResource{}
-	_ resource.ResourceWithImportState = &boardSettingsResource{}
+	_ resource.Resource                 = &boardSettingsResource{}
+	_ resource.ResourceWithConfigure    = &boardSettingsResource{}
+	_ resource.ResourceWithImportState  = &boardSettingsResource{}
+	_ resource.ResourceWithUpgradeState = &boardSettingsResource{}
 )
 
 // NewBoardSettingsResource returns the homarr_board_settings resource.
@@ -35,8 +37,14 @@ type boardSettingsResource struct {
 }
 
 type boardSettingsModel struct {
-	ID                        types.String `tfsdk:"id"`
-	BoardID                   types.String `tfsdk:"board_id"`
+	ID      types.String `tfsdk:"id"`
+	BoardID types.String `tfsdk:"board_id"`
+	boardSettingsValues
+}
+
+// boardSettingsValues are the settings themselves. The resource and the data
+// source embed them and differ only in how they identify the board.
+type boardSettingsValues struct {
 	PageTitle                 types.String `tfsdk:"page_title"`
 	MetaTitle                 types.String `tfsdk:"meta_title"`
 	LogoImageURL              types.String `tfsdk:"logo_image_url"`
@@ -60,6 +68,8 @@ func (r *boardSettingsResource) Metadata(_ context.Context, req resource.Metadat
 
 func (r *boardSettingsResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
+		// Version 1 turned opacity from a float into an integer; see UpgradeState.
+		Version: 1,
 		MarkdownDescription: "Manages the appearance and behaviour settings of a Homarr board.\n\n" +
 			"Every attribute is optional and computed: declare the ones you want to control and leave the " +
 			"rest alone. Undeclared attributes are refreshed from Homarr and never reverted, so this " +
@@ -96,26 +106,41 @@ func (r *boardSettingsResource) Schema(_ context.Context, _ resource.SchemaReque
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Title shown in the browser tab for this board.",
+				Validators: []validator.String{
+					notBlankValidator(),
+				},
 			},
 			"meta_title": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Value of the page's `<meta>` title, used by link previews.",
+				Validators: []validator.String{
+					notBlankValidator(),
+				},
 			},
 			"logo_image_url": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "URL of the logo shown in the board's header.",
+				Validators: []validator.String{
+					notBlankValidator(),
+				},
 			},
 			"favicon_image_url": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "URL of the board's favicon.",
+				Validators: []validator.String{
+					notBlankValidator(),
+				},
 			},
 			"background_image_url": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "URL of the board's background image.",
+				Validators: []validator.String{
+					notBlankValidator(),
+				},
 			},
 			"background_image_attachment": schema.StringAttribute{
 				Optional:            true,
@@ -162,9 +187,9 @@ func (r *boardSettingsResource) Schema(_ context.Context, _ resource.SchemaReque
 				Optional: true,
 				Computed: true,
 				MarkdownDescription: "Opacity of board items, a whole number from `0` to `100`.\n\n" +
-					"~> **Note** This was a floating-point attribute before. Homarr's schema calls it a " +
-					"number but stores an integer column, so a fractional value was silently truncated and " +
-					"came back different. It is an integer here to match what Homarr actually keeps.",
+					"~> **Note** This was a floating-point attribute before. Homarr's API accepts fractions, but " +
+					"its UI works in steps of 5 and declares the column as an integer, so the provider keeps to " +
+					"whole numbers. A fractional value set outside Terraform is reported truncated.",
 				Validators: []validator.Int64{
 					int64validator.Between(0, 100),
 				},
@@ -194,7 +219,7 @@ func (r *boardSettingsResource) Schema(_ context.Context, _ resource.SchemaReque
 				Computed:            true,
 				MarkdownDescription: "Custom CSS applied to the board. At most 16384 characters.",
 				Validators: []validator.String{
-					stringvalidator.LengthAtMost(16384),
+					jsLengthAtMostValidator(16384),
 				},
 			},
 			"disable_status": schema.BoolAttribute{
@@ -211,34 +236,64 @@ func (r *boardSettingsResource) Configure(_ context.Context, req resource.Config
 }
 
 // fromAPI copies a settings read into the model.
-//
-// Homarr reports the five URL/title fields and iconColor as null when unset,
-// and customCss as "" because that column is not nullable. Both map straight
-// through: with every attribute Optional+Computed, an undeclared one simply
-// adopts whatever Homarr holds.
 func (m *boardSettingsModel) fromAPI(settings *client.BoardSettingsRead) {
 	m.ID = types.StringValue(settings.ID)
 	m.BoardID = types.StringValue(settings.ID)
-	m.PageTitle = stringValueOrNull(settings.PageTitle)
-	m.MetaTitle = stringValueOrNull(settings.MetaTitle)
-	m.LogoImageURL = stringValueOrNull(settings.LogoImageURL)
-	m.FaviconImageURL = stringValueOrNull(settings.FaviconImageURL)
-	m.BackgroundImageURL = stringValueOrNull(settings.BackgroundImageURL)
+	m.boardSettingsValues.fromAPI(settings)
+}
+
+// fromAPI copies the settings Homarr reports.
+//
+// Homarr reports the five URL/title fields and iconColor as null when unset,
+// and customCss as "" because that column is not nullable. With every attribute
+// Optional+Computed, an undeclared one simply adopts whatever Homarr holds.
+//
+// The six nullable fields are also reported as null after being set to "" —
+// Homarr stores "" as unset — so a "" already in the model is kept rather than
+// replaced by null.
+func (m *boardSettingsValues) fromAPI(settings *client.BoardSettingsRead) {
+	m.PageTitle = stringValueOrNullKeepingEmpty(settings.PageTitle, m.PageTitle)
+	m.MetaTitle = stringValueOrNullKeepingEmpty(settings.MetaTitle, m.MetaTitle)
+	m.LogoImageURL = stringValueOrNullKeepingEmpty(settings.LogoImageURL, m.LogoImageURL)
+	m.FaviconImageURL = stringValueOrNullKeepingEmpty(settings.FaviconImageURL, m.FaviconImageURL)
+	m.BackgroundImageURL = stringValueOrNullKeepingEmpty(settings.BackgroundImageURL, m.BackgroundImageURL)
 	m.BackgroundImageAttachment = types.StringValue(settings.BackgroundImageAttachment)
 	m.BackgroundImageRepeat = types.StringValue(settings.BackgroundImageRepeat)
 	m.BackgroundImageSize = types.StringValue(settings.BackgroundImageSize)
 	m.PrimaryColor = types.StringValue(settings.PrimaryColor)
 	m.SecondaryColor = types.StringValue(settings.SecondaryColor)
 	m.Opacity = types.Int64Value(int64(settings.Opacity))
-	m.IconColor = stringValueOrNull(settings.IconColor)
+	m.IconColor = stringValueOrNullKeepingEmpty(settings.IconColor, m.IconColor)
 	m.ItemRadius = types.StringValue(settings.ItemRadius)
 	m.CustomCSS = types.StringValue(settings.CustomCSS)
 	m.DisableStatus = types.BoolValue(settings.DisableStatus)
 }
 
+// nullUnknowns turns every attribute still unknown into null. It is for the
+// write-only fallback, where nothing can be read back to fill the attributes
+// the configuration left out, and Terraform rejects unknown values once an
+// apply has finished.
+func (m *boardSettingsValues) nullUnknowns() {
+	for _, s := range []*types.String{
+		&m.PageTitle, &m.MetaTitle, &m.LogoImageURL, &m.FaviconImageURL, &m.BackgroundImageURL,
+		&m.BackgroundImageAttachment, &m.BackgroundImageRepeat, &m.BackgroundImageSize,
+		&m.PrimaryColor, &m.SecondaryColor, &m.IconColor, &m.ItemRadius, &m.CustomCSS,
+	} {
+		if s.IsUnknown() {
+			*s = types.StringNull()
+		}
+	}
+	if m.Opacity.IsUnknown() {
+		m.Opacity = types.Int64Null()
+	}
+	if m.DisableStatus.IsUnknown() {
+		m.DisableStatus = types.BoolNull()
+	}
+}
+
 // toPatch builds the partial settings body. Unset attributes stay nil and are
 // omitted, so Homarr leaves them as they are.
-func (m *boardSettingsModel) toPatch() client.BoardSettings {
+func (m *boardSettingsValues) toPatch() client.BoardSettings {
 	return client.BoardSettings{
 		PageTitle:                 stringPointerOrNil(m.PageTitle),
 		MetaTitle:                 stringPointerOrNil(m.MetaTitle),
@@ -264,26 +319,42 @@ func (m *boardSettingsModel) toPatch() client.BoardSettings {
 //
 // Against a Homarr older than 2.3.0 the read-back is unavailable; the write
 // still succeeds and the model keeps the configured values, which is the
-// behaviour this resource had before the endpoint existed.
+// behaviour this resource had before the endpoint existed. The attributes the
+// configuration left out have nothing to be filled from and become null.
 func (r *boardSettingsResource) apply(ctx context.Context, plan *boardSettingsModel, diags *diag.Diagnostics) error {
 	boardID := plan.BoardID.ValueString()
-	if err := r.client.UpdateBoardSettings(ctx, boardID, plan.toPatch()); err != nil {
-		return err
+
+	// A configuration that declares nothing but board_id has nothing to write,
+	// and Homarr fails an update with no values to set, so it is only read.
+	patch := plan.toPatch()
+	patched := patch != client.BoardSettings{}
+	if patched {
+		if err := r.client.UpdateBoardSettings(ctx, boardID, patch); err != nil {
+			return err
+		}
 	}
 	plan.ID = types.StringValue(boardID)
 
 	settings, err := r.client.GetBoardSettings(ctx, boardID)
 	if err != nil {
-		if client.IsNotFound(err) {
-			diags.AddWarning(
-				"Homarr board settings could not be read back",
-				"The settings were applied, but GET /api/boards/"+boardID+"/settings is unavailable — "+
-					"either this Homarr predates 2.3.0, or the API key lacks modify access to the board. "+
-					"State records what was applied, so drift will not be detected.",
-			)
-			return nil
+		if !client.IsNotFound(err) {
+			return err
 		}
-		return err
+		// Without a write, nothing has confirmed yet that the board exists, and
+		// this 404 alone cannot tell a missing board from an older Homarr.
+		if !patched {
+			if _, boardErr := r.client.GetBoard(ctx, boardID); boardErr != nil {
+				return boardErr
+			}
+		}
+		plan.nullUnknowns()
+		diags.AddWarning(
+			"Homarr board settings could not be read back",
+			"GET /api/boards/"+boardID+"/settings is unavailable — either this Homarr predates 2.3.0, or "+
+				"the API key lacks modify access to the board. State records the configured values, so "+
+				"drift will not be detected.",
+		)
+		return nil
 	}
 	plan.fromAPI(settings)
 	return nil
@@ -390,4 +461,46 @@ func (r *boardSettingsResource) Delete(ctx context.Context, _ resource.DeleteReq
 func (r *boardSettingsResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("board_id"), req.ID)...)
+}
+
+// UpgradeState migrates state written before opacity became an integer.
+//
+// Version 0 declared opacity as a float, and because the resource could not read
+// settings back it stored whatever was configured — fractions included. Such a
+// value cannot be decoded into the integer attribute, so it is truncated, the
+// same way a fractional value read from Homarr is reported. Every other
+// attribute has the same type in both versions and carries over untouched.
+func (r *boardSettingsResource) UpgradeState(ctx context.Context) map[int64]resource.StateUpgrader {
+	var current resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &current)
+
+	prior := current.Schema
+	prior.Version = 0
+	prior.Attributes = maps.Clone(current.Schema.Attributes)
+	prior.Attributes["opacity"] = schema.Float64Attribute{Optional: true}
+
+	return map[int64]resource.StateUpgrader{
+		0: {
+			PriorSchema:   &prior,
+			StateUpgrader: upgradeBoardSettingsStateV0,
+		},
+	}
+}
+
+func upgradeBoardSettingsStateV0(ctx context.Context, req resource.UpgradeStateRequest, resp *resource.UpgradeStateResponse) {
+	var opacity types.Float64
+	resp.Diagnostics.Append(req.State.GetAttribute(ctx, path.Root("opacity"), &opacity)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Float64 and Int64 attributes share Terraform's number type, so the prior
+	// state already has the current schema's shape and only the value changes.
+	resp.State.Raw = req.State.Raw
+
+	upgraded := types.Int64Null()
+	if !opacity.IsNull() && !opacity.IsUnknown() {
+		upgraded = types.Int64Value(int64(opacity.ValueFloat64()))
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("opacity"), upgraded)...)
 }

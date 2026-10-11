@@ -41,6 +41,11 @@ func (r *appResource) Metadata(_ context.Context, req resource.MetadataRequest, 
 	resp.TypeName = req.ProviderTypeName + "_app"
 }
 
+// Homarr's appManageSchema trims name, description, icon_url, href and
+// ping_url, and stores "" as null for the three optional ones. State is written
+// from what Homarr answers, so a value it would rewrite is refused at plan time:
+// otherwise the apply fails with "Provider produced inconsistent result" and the
+// next refresh shows a diff.
 func (r *appResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages a Homarr app — a bookmark or shortcut to a service, which boards then " +
@@ -56,40 +61,56 @@ func (r *appResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 				},
 			},
 			"name": schema.StringAttribute{
-				Required:            true,
-				MarkdownDescription: "Display name of the app. Between 1 and 64 characters.",
+				Required: true,
+				MarkdownDescription: "Display name of the app. Between 1 and 64 characters, with no leading or " +
+					"trailing whitespace, which Homarr would strip.",
 				Validators: []validator.String{
-					stringvalidator.LengthBetween(1, 64),
+					jsLengthBetweenValidator(1, 64),
+					trimmedValidator(),
 				},
 			},
 			"description": schema.StringAttribute{
 				Optional: true,
-				MarkdownDescription: "Optional description shown in the Homarr UI. At most 512 characters. " +
-					"An empty string is stored as `null` by Homarr, so use `null` rather than `\"\"` to keep " +
-					"plans clean.",
+				MarkdownDescription: "Optional description shown in the Homarr UI. At most 512 characters, with " +
+					"no leading or trailing whitespace. Leave it out, or set it to `null`, for no description; " +
+					"`\"\"` is rejected because Homarr stores it as `null`.",
 				Validators: []validator.String{
-					stringvalidator.LengthAtMost(512),
+					stringvalidator.LengthAtLeast(1),
+					jsLengthAtMostValidator(512),
+					trimmedValidator(),
 				},
 			},
 			"icon_url": schema.StringAttribute{
 				Required: true,
-				MarkdownDescription: "URL of the app's icon. Homarr ships a large icon repository; values such " +
-					"as `https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons@master/svg/grafana.svg` are typical.",
+				MarkdownDescription: "URL of the app's icon, with no leading or trailing whitespace. Homarr ships " +
+					"a large icon repository; values such as " +
+					"`https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons@master/svg/grafana.svg` are typical.",
 				Validators: []validator.String{
 					stringvalidator.LengthAtLeast(1),
+					trimmedValidator(),
 				},
 			},
 			"href": schema.StringAttribute{
 				Optional: true,
-				MarkdownDescription: "URL or URI the app tile links to. Homarr 1.74.0 and later reject " +
-					"only `javascript:` URIs and accept everything else, including schemes written " +
-					"without `//` such as `mailto:`, and relative paths. Homarr 1.73.x additionally " +
-					"required an absolute `scheme://` URL.",
+				MarkdownDescription: "URL or URI the app tile links to, with no leading or trailing whitespace. " +
+					"Homarr 1.74.0 and later reject only `javascript:` URIs and accept everything else, " +
+					"including schemes written without `//` such as `mailto:`, and relative paths. Homarr " +
+					"1.73.x additionally required an absolute `scheme://` URL. Leave it out, or set it to " +
+					"`null`, for a tile that links nowhere; `\"\"` is rejected because Homarr stores it as `null`.",
+				Validators: []validator.String{
+					stringvalidator.LengthAtLeast(1),
+					trimmedValidator(),
+				},
 			},
 			"ping_url": schema.StringAttribute{
 				Optional: true,
 				MarkdownDescription: "URL Homarr pings to show the app's online status. Must be `http://` or " +
-					"`https://`.",
+					"`https://`, with no leading or trailing whitespace. Leave it out, or set it to `null`, to " +
+					"have Homarr ping `href` instead; `\"\"` is rejected because Homarr stores it as `null`.",
+				Validators: []validator.String{
+					stringvalidator.LengthAtLeast(1),
+					trimmedValidator(),
+				},
 			},
 		},
 	}
@@ -181,8 +202,10 @@ func (r *appResource) Update(ctx context.Context, req resource.UpdateRequest, re
 		return
 	}
 
-	// PATCH /api/apps/{id} returns no body, so re-read to pick up Homarr's
-	// normalisation — notably empty strings collapsing to null.
+	// PATCH /api/apps/{id} returns no body, so read the app back to record what
+	// Homarr stored. The schema refuses the values Homarr would rewrite on the
+	// way in — surrounding whitespace, and "" where it stores null — so this
+	// matches the plan instead of failing the apply as an inconsistent result.
 	app, err := r.client.GetApp(ctx, id)
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to read Homarr app back after update", err.Error())

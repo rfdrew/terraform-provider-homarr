@@ -46,8 +46,9 @@ func (r *serverBoardSettingsResource) Schema(_ context.Context, _ resource.Schem
 			"resources. Unlike `homarr_board_settings`, these values *are* readable, so drift is detected " +
 			"normally.\n\n" +
 			"Creating this resource adopts the existing settings rather than resetting them — only the " +
-			"attributes you specify are sent. Destroying it leaves the settings in place and simply removes " +
-			"them from state.",
+			"attributes you specify are sent. Because of that, `null` means \"not managed\" rather than " +
+			"\"none\": to clear `home_board_id` or `mobile_home_board_id`, set it to `\"\"`. Destroying this " +
+			"resource leaves the settings in place and simply removes them from state.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -59,13 +60,20 @@ func (r *serverBoardSettingsResource) Schema(_ context.Context, _ resource.Schem
 			"home_board_id": schema.StringAttribute{
 				Optional: true,
 				Computed: true,
-				MarkdownDescription: "Board shown to users on desktop when they have no personal home board. " +
-					"Homarr requires it to reference a public board.",
+				MarkdownDescription: "Board shown on desktop to anonymous visitors and to users with no personal " +
+					"or group home board. Homarr requires it to reference a public board, and refuses to make " +
+					"that board private while it is selected here. Set to `\"\"` to clear it; leaving it out keeps " +
+					"whatever Homarr has. Once it is cleared, those visitors get \"No home board found\" instead — " +
+					"on mobile too, unless `mobile_home_board_id` is set. Home boards chosen by users and groups, " +
+					"including *everyone*, are separate settings and are not affected.",
 			},
 			"mobile_home_board_id": schema.StringAttribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Board shown to users on mobile when they have no personal home board.",
+				Optional: true,
+				Computed: true,
+				MarkdownDescription: "Board shown on mobile to anonymous visitors and to users with no personal " +
+					"or group home board. Homarr requires it to reference a public board, and refuses to make " +
+					"that board private while it is selected here. Set to `\"\"` to clear it; leaving it out keeps " +
+					"whatever Homarr has. Once it is cleared, mobile falls back to `home_board_id`.",
 			},
 			"enable_status_by_default": schema.BoolAttribute{
 				Optional:            true,
@@ -85,23 +93,55 @@ func (r *serverBoardSettingsResource) Configure(_ context.Context, req resource.
 	r.client = clientFromProviderData(req.ProviderData, &resp.Diagnostics)
 }
 
+// fromAPI copies the settings Homarr reports into the model.
+//
+// A cleared home board reads back as null, but this resource asks for that
+// with "", so a "" already in the model is kept rather than replaced by null.
 func (m *serverBoardSettingsModel) fromAPI(settings *client.ServerBoardSettings) {
 	m.ID = types.StringValue("board")
-	m.HomeBoardID = stringValueOrNull(settings.HomeBoardID)
-	m.MobileHomeBoardID = stringValueOrNull(settings.MobileHomeBoardID)
+	m.HomeBoardID = stringValueOrNullKeepingEmpty(settings.HomeBoardID, m.HomeBoardID)
+	m.MobileHomeBoardID = stringValueOrNullKeepingEmpty(settings.MobileHomeBoardID, m.MobileHomeBoardID)
 	m.EnableStatusByDefault = types.BoolValue(settings.EnableStatusByDefault)
 	m.ForceDisableStatus = types.BoolValue(settings.ForceDisableStatus)
 }
 
-// apply sends only the attributes present in the plan, so unmanaged settings
-// keep their current values.
+// patch collects the attributes present in the plan, so unmanaged settings keep
+// their current values.
+//
+// The attributes are Optional+Computed, so a null or unknown home board only
+// means "not configured" and its key is left out. Clearing one is spelled "",
+// which goes out as an explicit null: Homarr would reject "" itself as a board
+// id that is not a public board.
+func (m *serverBoardSettingsModel) patch() client.ServerBoardSettingsPatch {
+	patch := client.ServerBoardSettingsPatch{}
+
+	putBoard := func(key string, v types.String) {
+		switch {
+		case v.IsNull() || v.IsUnknown():
+			// Not configured: leave the key out.
+		case v.ValueString() == "":
+			patch[key] = nil
+		default:
+			patch[key] = v.ValueString()
+		}
+	}
+	putBool := func(key string, v types.Bool) {
+		if !v.IsNull() && !v.IsUnknown() {
+			patch[key] = v.ValueBool()
+		}
+	}
+
+	putBoard("homeBoardId", m.HomeBoardID)
+	putBoard("mobileHomeBoardId", m.MobileHomeBoardID)
+	putBool("enableStatusByDefault", m.EnableStatusByDefault)
+	putBool("forceDisableStatus", m.ForceDisableStatus)
+	return patch
+}
+
+// apply sends the plan's patch and refreshes the model from Homarr's answer,
+// which always carries the full settings.
 func (r *serverBoardSettingsResource) apply(ctx context.Context, plan *serverBoardSettingsModel) error {
-	settings, err := r.client.UpdateServerBoardSettings(ctx, client.ServerBoardSettingsPatch{
-		HomeBoardID:           stringPointerOrNil(plan.HomeBoardID),
-		MobileHomeBoardID:     stringPointerOrNil(plan.MobileHomeBoardID),
-		EnableStatusByDefault: boolPointerOrNil(plan.EnableStatusByDefault),
-		ForceDisableStatus:    boolPointerOrNil(plan.ForceDisableStatus),
-	})
+	settings, err := r.client.UpdateServerBoardSettings(ctx, plan.patch())
 	if err != nil {
 		return err
 	}

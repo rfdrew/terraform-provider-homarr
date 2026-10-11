@@ -14,12 +14,12 @@ type BoardCreator struct {
 	Email *string `json:"email"`
 }
 
-// BoardSummary mirrors boardSummarySchema, the only board shape the REST
-// surface exposes (GET /api/boards).
+// BoardSummary mirrors boardSummarySchema, the shape GET /api/boards returns.
 //
 // Note what is absent: the column count, and every field managed by
-// PATCH /api/boards/{id}/settings apart from logoImageUrl. Those cannot be read
-// back over REST at all.
+// PATCH /api/boards/{id}/settings apart from logoImageUrl. The settings are
+// readable separately since Homarr 2.3.0 — see GetBoardSettings — but the
+// column count still cannot be read back over REST at all.
 type BoardSummary struct {
 	ID           string        `json:"id"`
 	Name         string        `json:"name"`
@@ -40,8 +40,8 @@ type BoardCreateRequest struct {
 // BoardSettings is the body for PATCH /api/boards/{id}/settings.
 //
 // Every field is optional (the schema is .partial()), so all are pointers and
-// omitted when nil. There is deliberately no matching read method: Homarr has
-// no GET for per-board settings, only the tRPC-only full board query.
+// omitted when nil. The read counterpart is BoardSettingsRead, from
+// GetBoardSettings; releases before 2.3.0 have no GET for these at all.
 type BoardSettings struct {
 	PageTitle                 *string `json:"pageTitle,omitempty"`
 	MetaTitle                 *string `json:"metaTitle,omitempty"`
@@ -191,11 +191,12 @@ func (c *Client) SetBoardVisibility(ctx context.Context, id string, isPublic boo
 // SetBoardAsHome makes the board the desktop home board of the user behind the
 // API key.
 //
-// This is a set-only operation: Homarr writes users.homeBoardId and offers no
-// REST call to clear it. The home board is a per-user singleton, so this
-// implicitly stops whichever board held the flag before from being the home
-// board. Clearing it requires PATCH /api/users/changeHome with an explicit
-// user id — see SetUserHomeBoards.
+// This is a set-only operation: Homarr writes users.homeBoardId. The home
+// board is a per-user singleton, so this implicitly stops whichever board held
+// the flag before from being the home board. Clearing goes through the user
+// instead: PATCH /api/users/preferences with an explicit null (see
+// UpdateUserPreferences, Homarr 2.3.0 or newer), or PATCH /api/users/changeHome,
+// which replaces both slots at once (see SetUserHomeBoards).
 func (c *Client) SetBoardAsHome(ctx context.Context, id string) error {
 	return c.do(ctx, "PATCH", "/api/boards/"+url.PathEscape(id)+"/home", struct{}{}, nil)
 }

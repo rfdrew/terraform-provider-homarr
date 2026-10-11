@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 
-	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -30,18 +29,9 @@ type userPreferencesResource struct {
 }
 
 type userPreferencesModel struct {
-	ID                        types.String `tfsdk:"id"`
-	UserID                    types.String `tfsdk:"user_id"`
-	ColorScheme               types.String `tfsdk:"color_scheme"`
-	ByteUnitSystem            types.String `tfsdk:"byte_unit_system"`
-	FirstDayOfWeek            types.Int64  `tfsdk:"first_day_of_week"`
-	PingIconsEnabled          types.Bool   `tfsdk:"ping_icons_enabled"`
-	EnableRightClickOnWidgets types.Bool   `tfsdk:"enable_right_click_on_widgets"`
-	HomeBoardID               types.String `tfsdk:"home_board_id"`
-	MobileHomeBoardID         types.String `tfsdk:"mobile_home_board_id"`
-	DefaultSearchEngineID     types.String `tfsdk:"default_search_engine_id"`
-	OpenSearchInNewTab        types.Bool   `tfsdk:"open_search_in_new_tab"`
-	DdgBangs                  types.Bool   `tfsdk:"ddg_bangs"`
+	ID     types.String `tfsdk:"id"`
+	UserID types.String `tfsdk:"user_id"`
+	userPreferenceValues
 }
 
 func (r *userPreferencesResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -59,10 +49,12 @@ func (r *userPreferencesResource) Schema(_ context.Context, _ resource.SchemaReq
 			"~> **Do not manage the same user with both this resource and a `homarr_user`.** Both write the " +
 			"same fields, so they would overwrite each other on every apply.\n\n" +
 			"Every attribute is optional and computed: declare what you want to control and the rest is " +
-			"refreshed from Homarr and left alone. Targeting a user other than the one behind the API key " +
+			"refreshed from Homarr and left alone. Because of that, `null` means \"not managed\" rather than " +
+			"\"empty\": to clear `home_board_id`, `mobile_home_board_id` or `default_search_engine_id`, set it " +
+			"to `\"\"`. Targeting a user other than the one behind the API key " +
 			"requires admin. Destroying this resource leaves the preferences in place — they belong to the " +
 			"user and disappear only with the account.",
-		Attributes: map[string]schema.Attribute{
+		Attributes: withUserPreferenceAttributes(map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Same value as `user_id`, present because Terraform requires an `id`.",
@@ -80,70 +72,26 @@ func (r *userPreferencesResource) Schema(_ context.Context, _ resource.SchemaReq
 					stringvalidator.LengthAtLeast(1),
 				},
 			},
-			"color_scheme": schema.StringAttribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Interface colour scheme. One of `auto`, `light` or `dark`.",
-				Validators: []validator.String{
-					stringvalidator.OneOf("auto", "light", "dark"),
-				},
-			},
-			"byte_unit_system": schema.StringAttribute{
-				Optional: true,
-				Computed: true,
-				MarkdownDescription: "How byte sizes are displayed. One of `binary` (KiB, MiB) or " +
-					"`decimal` (kB, MB).",
-				Validators: []validator.String{
-					stringvalidator.OneOf("binary", "decimal"),
-				},
-			},
-			"first_day_of_week": schema.Int64Attribute{
-				Optional: true,
-				Computed: true,
-				MarkdownDescription: "First day of the week in calendar widgets, `0` for Sunday through " +
-					"`6` for Saturday.",
-				Validators: []validator.Int64{
-					int64validator.Between(0, 6),
-				},
-			},
-			"ping_icons_enabled": schema.BoolAttribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Show online-status ping indicators as icons rather than dots.",
-			},
-			"enable_right_click_on_widgets": schema.BoolAttribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Let widgets handle right-clicks instead of the browser context menu.",
-			},
 			"home_board_id": schema.StringAttribute{
 				Optional: true,
 				Computed: true,
-				MarkdownDescription: "Board shown to this user on desktop. The user must be able to view " +
-					"it. Set to `null` to clear it.",
+				MarkdownDescription: "Board shown to this user on desktop. Set to `\"\"` to clear it; leaving " +
+					"it out keeps whatever Homarr has. " + homeBoardAccessNote,
 			},
 			"mobile_home_board_id": schema.StringAttribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Board shown to this user on mobile. Set to `null` to clear it.",
+				Optional: true,
+				Computed: true,
+				MarkdownDescription: "Board shown to this user on mobile. Set to `\"\"` to clear it; leaving " +
+					"it out keeps whatever Homarr has. " + homeBoardAccessNote,
 			},
 			"default_search_engine_id": schema.StringAttribute{
 				Optional: true,
 				Computed: true,
 				MarkdownDescription: "Identifier of the search engine used by the search bar. Search " +
-					"engines themselves have no REST surface, so the id has to come from Homarr.",
+					"engines themselves have no REST surface, so the id has to come from Homarr. Set to `\"\"` " +
+					"to clear it; leaving it out keeps whatever Homarr has.",
 			},
-			"open_search_in_new_tab": schema.BoolAttribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Open search results in a new browser tab.",
-			},
-			"ddg_bangs": schema.BoolAttribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Enable DuckDuckGo-style `!bang` shortcuts in the search bar.",
-			},
-		},
+		}),
 	}
 }
 
@@ -154,53 +102,15 @@ func (r *userPreferencesResource) Configure(_ context.Context, req resource.Conf
 func (m *userPreferencesModel) fromAPI(prefs *client.UserPreferences) {
 	m.ID = types.StringValue(prefs.UserID)
 	m.UserID = types.StringValue(prefs.UserID)
-	m.ColorScheme = types.StringValue(prefs.ColorScheme)
-	m.ByteUnitSystem = types.StringValue(prefs.ByteUnitSystem)
-	m.FirstDayOfWeek = types.Int64Value(prefs.FirstDayOfWeek)
-	m.PingIconsEnabled = types.BoolValue(prefs.PingIconsEnabled)
-	m.EnableRightClickOnWidgets = types.BoolValue(prefs.EnableRightClickOnWidgets)
-	m.HomeBoardID = stringValueOrNull(prefs.HomeBoardID)
-	m.MobileHomeBoardID = stringValueOrNull(prefs.MobileHomeBoardID)
-	m.DefaultSearchEngineID = stringValueOrNull(prefs.DefaultSearchEngineID)
-	m.OpenSearchInNewTab = types.BoolValue(prefs.OpenSearchInNewTab)
-	m.DdgBangs = types.BoolValue(prefs.DdgBangs)
-}
-
-// toPatch collects what the plan sets and the prior state does not already
-// hold. Pass a zero-valued prior to mean "everything the plan sets".
-func (m *userPreferencesModel) toPatch(prior userPreferencesModel) client.UserPreferencesPatch {
-	return preferencesPatch(userModel{
-		HomeBoardID:               m.HomeBoardID,
-		MobileHomeBoardID:         m.MobileHomeBoardID,
-		ColorScheme:               m.ColorScheme,
-		ByteUnitSystem:            m.ByteUnitSystem,
-		FirstDayOfWeek:            m.FirstDayOfWeek,
-		PingIconsEnabled:          m.PingIconsEnabled,
-		EnableRightClickOnWidgets: m.EnableRightClickOnWidgets,
-		DefaultSearchEngineID:     m.DefaultSearchEngineID,
-		OpenSearchInNewTab:        m.OpenSearchInNewTab,
-		DdgBangs:                  m.DdgBangs,
-	}, userModel{
-		HomeBoardID:               prior.HomeBoardID,
-		MobileHomeBoardID:         prior.MobileHomeBoardID,
-		ColorScheme:               prior.ColorScheme,
-		ByteUnitSystem:            prior.ByteUnitSystem,
-		FirstDayOfWeek:            prior.FirstDayOfWeek,
-		PingIconsEnabled:          prior.PingIconsEnabled,
-		EnableRightClickOnWidgets: prior.EnableRightClickOnWidgets,
-		DefaultSearchEngineID:     prior.DefaultSearchEngineID,
-		OpenSearchInNewTab:        prior.OpenSearchInNewTab,
-		DdgBangs:                  prior.DdgBangs,
-	})
+	m.userPreferenceValues.fromAPI(prefs.UserPreferenceFields)
 }
 
 // apply sends the patch, if any, and refreshes the model from the response.
 // Homarr returns the full preferences from PATCH, so no extra read is needed;
 // when nothing changed it is read instead, to fill the computed attributes.
-func (r *userPreferencesResource) apply(ctx context.Context, plan *userPreferencesModel, prior userPreferencesModel) error {
+func (r *userPreferencesResource) apply(ctx context.Context, plan *userPreferencesModel, patch client.UserPreferencesPatch) error {
 	userID := plan.UserID.ValueString()
 
-	patch := plan.toPatch(prior)
 	if len(patch) == 0 {
 		prefs, err := r.client.GetUserPreferences(ctx, userID)
 		if err != nil {
@@ -225,7 +135,12 @@ func (r *userPreferencesResource) Create(ctx context.Context, req resource.Creat
 		return
 	}
 
-	if err := r.apply(ctx, &plan, userPreferencesModel{}); err != nil {
+	patch := preferencesPatch(plan.userPreferenceValues, userPreferenceValues{})
+	if err := r.apply(ctx, &plan, patch); err != nil {
+		if isBoardNotFound(err) {
+			addBoardNotFoundError(&resp.Diagnostics, patch, err)
+			return
+		}
 		if client.IsNotFound(err) {
 			resp.Diagnostics.AddAttributeError(
 				path.Root("user_id"),
@@ -250,18 +165,46 @@ func (r *userPreferencesResource) Read(ctx context.Context, req resource.ReadReq
 		return
 	}
 
-	prefs, err := r.client.GetUserPreferences(ctx, state.UserID.ValueString())
-	if err != nil {
-		if client.IsNotFound(err) {
-			// The user is gone, and so are its preferences.
-			resp.State.RemoveResource(ctx)
-			return
-		}
+	userID := state.UserID.ValueString()
+	prefs, err := r.client.GetUserPreferences(ctx, userID)
+	if err == nil {
+		state.fromAPI(prefs)
+		resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+		return
+	}
+	if !client.IsNotFound(err) {
 		resp.Diagnostics.AddError("Unable to read Homarr user preferences", err.Error())
 		return
 	}
 
-	state.fromAPI(prefs)
+	// A 404 is ambiguous: Homarr answers it for a user that does not exist, for
+	// another user when the key is not an admin, and — before 2.3.0 — for the
+	// endpoint itself. Only the first means the resource is gone, so the user is
+	// checked before dropping it from state. GET /api/users/{id} tells the three
+	// apart: it 404s for a missing user, 403s for a non-admin key reading someone
+	// else, and succeeds when only the preferences endpoint is missing.
+	if _, userErr := r.client.GetUser(ctx, userID); userErr != nil {
+		switch {
+		case client.IsNotFound(userErr):
+			// The user is gone, and so are its preferences.
+			resp.State.RemoveResource(ctx)
+		case client.IsForbidden(userErr):
+			resp.Diagnostics.AddError(
+				"API key cannot manage this Homarr user's preferences",
+				"The API key is not an admin, so it can read and change only its own user's preferences, "+
+					"not those of "+userID+". Use an admin key, or the key of that user. "+userErr.Error(),
+			)
+		default:
+			resp.Diagnostics.AddError("Unable to verify the Homarr user still exists", userErr.Error())
+		}
+		return
+	}
+
+	resp.Diagnostics.AddWarning(
+		"Homarr user preferences could not be refreshed",
+		"The user exists, but GET /api/users/preferences answered 404, which means this Homarr predates "+
+			"2.3.0. State was left as last applied, so drift is not detected.",
+	)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -273,7 +216,12 @@ func (r *userPreferencesResource) Update(ctx context.Context, req resource.Updat
 		return
 	}
 
-	if err := r.apply(ctx, &plan, state); err != nil {
+	patch := preferencesPatch(plan.userPreferenceValues, state.userPreferenceValues)
+	if err := r.apply(ctx, &plan, patch); err != nil {
+		if isBoardNotFound(err) {
+			addBoardNotFoundError(&resp.Diagnostics, patch, err)
+			return
+		}
 		resp.Diagnostics.AddError("Unable to apply Homarr user preferences", err.Error())
 		return
 	}

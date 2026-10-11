@@ -115,43 +115,15 @@ func (d *boardSettingsDataSource) Configure(_ context.Context, req datasource.Co
 }
 
 type boardSettingsDataSourceModel struct {
-	ID                        types.String `tfsdk:"id"`
-	Name                      types.String `tfsdk:"name"`
-	PageTitle                 types.String `tfsdk:"page_title"`
-	MetaTitle                 types.String `tfsdk:"meta_title"`
-	LogoImageURL              types.String `tfsdk:"logo_image_url"`
-	FaviconImageURL           types.String `tfsdk:"favicon_image_url"`
-	BackgroundImageURL        types.String `tfsdk:"background_image_url"`
-	BackgroundImageAttachment types.String `tfsdk:"background_image_attachment"`
-	BackgroundImageRepeat     types.String `tfsdk:"background_image_repeat"`
-	BackgroundImageSize       types.String `tfsdk:"background_image_size"`
-	PrimaryColor              types.String `tfsdk:"primary_color"`
-	SecondaryColor            types.String `tfsdk:"secondary_color"`
-	Opacity                   types.Int64  `tfsdk:"opacity"`
-	IconColor                 types.String `tfsdk:"icon_color"`
-	ItemRadius                types.String `tfsdk:"item_radius"`
-	CustomCSS                 types.String `tfsdk:"custom_css"`
-	DisableStatus             types.Bool   `tfsdk:"disable_status"`
+	ID   types.String `tfsdk:"id"`
+	Name types.String `tfsdk:"name"`
+	boardSettingsValues
 }
 
 func (m *boardSettingsDataSourceModel) fromAPI(settings *client.BoardSettingsRead) {
 	m.ID = types.StringValue(settings.ID)
 	m.Name = types.StringValue(settings.Name)
-	m.PageTitle = stringValueOrNull(settings.PageTitle)
-	m.MetaTitle = stringValueOrNull(settings.MetaTitle)
-	m.LogoImageURL = stringValueOrNull(settings.LogoImageURL)
-	m.FaviconImageURL = stringValueOrNull(settings.FaviconImageURL)
-	m.BackgroundImageURL = stringValueOrNull(settings.BackgroundImageURL)
-	m.BackgroundImageAttachment = types.StringValue(settings.BackgroundImageAttachment)
-	m.BackgroundImageRepeat = types.StringValue(settings.BackgroundImageRepeat)
-	m.BackgroundImageSize = types.StringValue(settings.BackgroundImageSize)
-	m.PrimaryColor = types.StringValue(settings.PrimaryColor)
-	m.SecondaryColor = types.StringValue(settings.SecondaryColor)
-	m.Opacity = types.Int64Value(int64(settings.Opacity))
-	m.IconColor = stringValueOrNull(settings.IconColor)
-	m.ItemRadius = types.StringValue(settings.ItemRadius)
-	m.CustomCSS = types.StringValue(settings.CustomCSS)
-	m.DisableStatus = types.BoolValue(settings.DisableStatus)
+	m.boardSettingsValues.fromAPI(settings)
 }
 
 func (d *boardSettingsDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {

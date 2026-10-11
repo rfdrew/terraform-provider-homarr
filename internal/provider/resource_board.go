@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -61,8 +62,10 @@ func (r *boardResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 			"The widgets and app tiles placed *on* a board are not manageable here. Homarr can create an item " +
 			"over REST (`POST /api/boards/items`) but offers no way to list, update, move, resize or delete one, " +
 			"and the board's layout is tRPC-only — not enough to reconcile tiles declaratively.\n\n" +
-			"~> **Note** Homarr makes the first board a user creates their home board automatically, so " +
-			"`is_home` can come back `true` on a board that never asked for it. `is_home` and " +
+			"~> **Note** Homarr makes a new board its creator's desktop home board whenever that user has none " +
+			"selected — not only the first board, and again after `is_home = false` cleared the slot — so " +
+			"`is_home` can come back `true` on a board that never asked for it. Declaring `is_home = false` " +
+			"clears that again right after creation. `is_home` and " +
 			"`is_mobile_home` are the home boards *of the user behind the API key*; the instance-wide " +
 			"defaults live in `homarr_server_board_settings`.",
 		Attributes: map[string]schema.Attribute{
@@ -170,11 +173,16 @@ func (r *boardResource) Create(ctx context.Context, req resource.CreateRequest, 
 		return
 	}
 
+	// Creating a board can itself write the home board: Homarr makes the new
+	// board home when the creator has none. That write must not interleave with
+	// another board's select or clear, so it is serialised with them.
+	homeBoardMu.Lock()
 	id, err := r.client.CreateBoard(ctx, client.BoardCreateRequest{
 		Name:        plan.Name.ValueString(),
 		ColumnCount: plan.ColumnCount.ValueInt64(),
 		IsPublic:    plan.IsPublic.ValueBool(),
 	})
+	homeBoardMu.Unlock()
 	if err != nil {
 		if client.IsConflict(err) {
 			resp.Diagnostics.AddAttributeError(
@@ -194,7 +202,7 @@ func (r *boardResource) Create(ctx context.Context, req resource.CreateRequest, 
 	// returning an error without state would leak it. Reporting the failure
 	// afterwards taints the resource instead, which is recoverable.
 	var homeDiags diag.Diagnostics
-	r.applyHomeFlags(ctx, id, plan, boardModel{}, &homeDiags)
+	r.applyHomeFlags(ctx, id, plan, &homeDiags)
 
 	board, err := r.client.GetBoard(ctx, id)
 	if err != nil {
@@ -222,23 +230,47 @@ func boolCleared(value types.Bool) bool {
 	return !value.IsNull() && !value.IsUnknown() && !value.ValueBool()
 }
 
+// homeBoardMu serialises home-board changes across every homarr_board in a run.
+//
+// The home board is a per-user singleton spread over several resources, and
+// Terraform applies independent resources in parallel. Moving the flag from
+// board B to board A is one board selecting and another clearing; without this
+// lock B could confirm it holds the flag, lose the race to A selecting it, and
+// then clear the flag A had just taken. Board creation takes it too, because
+// Homarr may make the new board home as a side effect.
+var homeBoardMu sync.Mutex
+
 // applyHomeFlags selects or clears the board as desktop and/or mobile home
-// board, when the plan differs from the prior state.
+// board.
 //
 // Selecting uses PATCH /api/boards/{id}/home, which is set-only and per-user:
 // it writes the home board of the user behind the API key, which is also what
-// GET /api/boards reports back in isHome/isMobileHome.
+// GET /api/boards reports back in isHome/isMobileHome. It is sent whenever the
+// plan asks for the flag, even if prior state already has it: the call is
+// idempotent, and state can be stale — after `-refresh=false`, or when the flag
+// moved between refresh and apply — which would otherwise leave the board
+// without the flag the plan promised.
 //
 // Clearing has no board-side endpoint and goes through
 // PATCH /api/users/preferences with an explicit null, added in Homarr 2.3.0.
-// It is attempted only when the prior state says this board actually holds the
-// flag — clearing unconditionally would unset whichever other board currently
-// holds the per-user singleton.
-func (r *boardResource) applyHomeFlags(ctx context.Context, id string, plan, state boardModel, diags *diag.Diagnostics) {
-	clear := client.UserPreferencesPatch{}
+// That null empties the user's slot whichever board holds it, so the board is
+// re-read first and the slot is cleared only if this board holds it right now.
+// Prior state cannot answer that: on create it is empty even though Homarr may
+// have made the new board home automatically, and on update another board may
+// have taken the flag earlier in the same apply.
+func (r *boardResource) applyHomeFlags(ctx context.Context, id string, plan boardModel, diags *diag.Diagnostics) {
+	selectHome := boolSelected(plan.IsHome)
+	selectMobile := boolSelected(plan.IsMobileHome)
+	clearHome := boolCleared(plan.IsHome)
+	clearMobile := boolCleared(plan.IsMobileHome)
+	if !selectHome && !selectMobile && !clearHome && !clearMobile {
+		return
+	}
 
-	switch {
-	case boolSelected(plan.IsHome) && !state.IsHome.ValueBool():
+	homeBoardMu.Lock()
+	defer homeBoardMu.Unlock()
+
+	if selectHome {
 		if err := r.client.SetBoardAsHome(ctx, id); err != nil {
 			diags.AddAttributeError(
 				path.Root("is_home"),
@@ -246,12 +278,8 @@ func (r *boardResource) applyHomeFlags(ctx context.Context, id string, plan, sta
 				"Homarr requires view access to a board before it can become a home board. "+err.Error(),
 			)
 		}
-	case boolCleared(plan.IsHome) && state.IsHome.ValueBool():
-		clear["homeBoardId"] = nil
 	}
-
-	switch {
-	case boolSelected(plan.IsMobileHome) && !state.IsMobileHome.ValueBool():
+	if selectMobile {
 		if err := r.client.SetBoardAsMobileHome(ctx, id); err != nil {
 			diags.AddAttributeError(
 				path.Root("is_mobile_home"),
@@ -259,16 +287,35 @@ func (r *boardResource) applyHomeFlags(ctx context.Context, id string, plan, sta
 				"Homarr requires view access to a board before it can become a home board. "+err.Error(),
 			)
 		}
-	case boolCleared(plan.IsMobileHome) && state.IsMobileHome.ValueBool():
-		clear["mobileHomeBoardId"] = nil
+	}
+	if !clearHome && !clearMobile {
+		return
 	}
 
+	board, err := r.client.GetBoard(ctx, id)
+	if err != nil {
+		diags.AddError("Unable to check the Homarr home board before clearing it", err.Error())
+		return
+	}
+
+	clear := client.UserPreferencesPatch{}
+	if clearHome && board.IsHome {
+		clear["homeBoardId"] = nil
+	}
+	if clearMobile && board.IsMobileHome {
+		clear["mobileHomeBoardId"] = nil
+	}
 	if len(clear) == 0 {
 		return
 	}
 	if _, err := r.client.UpdateUserPreferences(ctx, "", clear); err != nil {
-		detail := "Clearing a home board needs PATCH /api/users/preferences, which Homarr added in 2.3.0. " +
-			"On an older release, move the flag to another board instead of removing it. " + err.Error()
+		detail := err.Error()
+		// The caller always exists, so a 404 here can only be the endpoint
+		// itself missing.
+		if client.IsNotFound(err) {
+			detail = "Clearing a home board needs PATCH /api/users/preferences, which Homarr added in 2.3.0. " +
+				"On an older release, move the flag to another board instead of removing it. " + detail
+		}
 		diags.AddError("Unable to clear the Homarr home board", detail)
 	}
 }
@@ -332,7 +379,7 @@ func (r *boardResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		}
 	}
 
-	r.applyHomeFlags(ctx, id, plan, state, &resp.Diagnostics)
+	r.applyHomeFlags(ctx, id, plan, &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
 	}

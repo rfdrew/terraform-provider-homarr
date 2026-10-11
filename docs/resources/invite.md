@@ -33,7 +33,7 @@ output "invite_url" {
 
 ### Required
 
-- `expiration_date` (String) Moment the invite stops working, as an RFC 3339 timestamp such as `2027-01-01T00:00:00Z`.
+- `expiration_date` (String) Moment the invite stops working, as an RFC 3339 timestamp such as `2027-01-01T00:00:00Z` or `2027-01-01T02:00:00+02:00`. It must be a whole second, because Homarr stores the date in whole seconds on SQLite: a value such as `2027-01-01T00:00:00.5Z` is rejected, while a zero fraction such as `.000` is allowed. `T` and `Z` must be upper case, and an offset must be written `+hh:mm` or `-hh:mm`.
 
 ~> **Note** Homarr has no endpoint to extend an invite, so changing this forces a new invite — and therefore a new token and link.
 

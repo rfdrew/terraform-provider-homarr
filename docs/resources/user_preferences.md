@@ -11,7 +11,7 @@ description: |-
 
   ~> Do not manage the same user with both this resource and a homarr_user. Both write the same fields, so they would overwrite each other on every apply.
 
-  Every attribute is optional and computed: declare what you want to control and the rest is refreshed from Homarr and left alone. Targeting a user other than the one behind the API key requires admin. Destroying this resource leaves the preferences in place — they belong to the user and disappear only with the account.
+  Every attribute is optional and computed: declare what you want to control and the rest is refreshed from Homarr and left alone. Because of that, null means "not managed" rather than "empty": to clear home_board_id, mobile_home_board_id or default_search_engine_id, set it to "". Targeting a user other than the one behind the API key requires admin. Destroying this resource leaves the preferences in place — they belong to the user and disappear only with the account.
 ---
 
 # homarr_user_preferences (Resource)
@@ -24,7 +24,7 @@ Manages the preferences of an existing Homarr user.
 
 ~> **Do not manage the same user with both this resource and a `homarr_user`.** Both write the same fields, so they would overwrite each other on every apply.
 
-Every attribute is optional and computed: declare what you want to control and the rest is refreshed from Homarr and left alone. Targeting a user other than the one behind the API key requires admin. Destroying this resource leaves the preferences in place — they belong to the user and disappear only with the account.
+Every attribute is optional and computed: declare what you want to control and the rest is refreshed from Homarr and left alone. Because of that, `null` means "not managed" rather than "empty": to clear `home_board_id`, `mobile_home_board_id` or `default_search_engine_id`, set it to `""`. Targeting a user other than the one behind the API key requires admin. Destroying this resource leaves the preferences in place — they belong to the user and disappear only with the account.
 
 ## Example Usage
 
@@ -68,11 +68,11 @@ resource "homarr_user" "service" {
 - `byte_unit_system` (String) How byte sizes are displayed. One of `binary` (KiB, MiB) or `decimal` (kB, MB).
 - `color_scheme` (String) Interface colour scheme. One of `auto`, `light` or `dark`.
 - `ddg_bangs` (Boolean) Enable DuckDuckGo-style `!bang` shortcuts in the search bar.
-- `default_search_engine_id` (String) Identifier of the search engine used by the search bar. Search engines themselves have no REST surface, so the id has to come from Homarr.
+- `default_search_engine_id` (String) Identifier of the search engine used by the search bar. Search engines themselves have no REST surface, so the id has to come from Homarr. Set to `""` to clear it; leaving it out keeps whatever Homarr has.
 - `enable_right_click_on_widgets` (Boolean) Let widgets handle right-clicks instead of the browser context menu.
 - `first_day_of_week` (Number) First day of the week in calendar widgets, `0` for Sunday through `6` for Saturday.
-- `home_board_id` (String) Board shown to this user on desktop. The user must be able to view it. Set to `null` to clear it.
-- `mobile_home_board_id` (String) Board shown to this user on mobile. Set to `null` to clear it.
+- `home_board_id` (String) Board shown to this user on desktop. Set to `""` to clear it; leaving it out keeps whatever Homarr has. Homarr only checks that the API key's user can view the board, and an admin key can view every board; the user themselves also needs view access, or their home page answers "Board not found".
+- `mobile_home_board_id` (String) Board shown to this user on mobile. Set to `""` to clear it; leaving it out keeps whatever Homarr has. Homarr only checks that the API key's user can view the board, and an admin key can view every board; the user themselves also needs view access, or their home page answers "Board not found".
 - `open_search_in_new_tab` (Boolean) Open search results in a new browser tab.
 - `ping_icons_enabled` (Boolean) Show online-status ping indicators as icons rather than dots.
 

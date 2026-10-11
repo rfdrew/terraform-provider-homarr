@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -9,10 +11,66 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/rfdrew/terraform-provider-homarr/internal/client"
 )
+
+// inviteExpirationPattern is the part of RFC 3339 an invite expiration may use.
+//
+// Homarr never sees the value as written: Create parses it and the client
+// sends the instant again in UTC, so the spelling only has to be one that
+// time.Parse reads the same way here and in fromAPI. That already rules out a
+// lower-case T or Z. When its RFC 3339 fast path fails, though, time.Parse
+// falls back to a looser parser that also takes a comma before the fraction,
+// a one-digit hour and offsets such as +24:00 or +23:60. None of those is
+// RFC 3339, which is what this attribute documents, so the pattern refuses
+// them instead of leaving the accepted spellings to that fallback.
+//
+// A fraction is allowed only if it is all zeros. Homarr's default SQLite
+// database keeps the expiration in whole seconds, so "00:00:00.5Z" comes back
+// as "00:00:00Z" — a different instant from the one planned, which Terraform
+// rejects as an inconsistent result. PostgreSQL keeps milliseconds, but whole
+// seconds are what every Homarr database keeps.
+//
+// A zero fraction such as ".000", the way Homarr itself prints dates, names
+// the same instant as no fraction at all. fromAPI compares instants rather than
+// spellings, so it keeps such a value as written, exactly as it keeps an
+// offset like +02:00.
+var inviteExpirationPattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.0+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$`)
+
+// inviteExpirationRequirement describes the values inviteExpirationPattern
+// lets through, for both the plan-time validator and Create.
+const inviteExpirationRequirement = `must be an RFC 3339 timestamp in whole seconds with an upper-case ` +
+	`T and Z, such as "2027-01-01T00:00:00Z" or "2027-01-01T02:00:00+02:00" (Homarr stores the date ` +
+	`in whole seconds on SQLite)`
+
+// parseInviteExpiration parses an expiration date that Homarr will accept and
+// store as the same instant. The pattern checks the shape; time.Parse then
+// checks the ranges — February 30th, hour 24 or a leap second — which zod
+// refuses as well. Within that shape the loose fallback has nothing extra to
+// accept, so time.Parse refuses exactly the out-of-range fields zod refuses.
+func parseInviteExpiration(s string) (time.Time, bool) {
+	if !inviteExpirationPattern.MatchString(s) {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	return t, err == nil
+}
+
+// inviteExpirationValidator rejects at plan time an expiration date that Create
+// could not parse, that Homarr would refuse, or that Homarr would store as a
+// different instant.
+func inviteExpirationValidator() validator.String {
+	return stringCheck{
+		description: inviteExpirationRequirement,
+		check: func(s string) bool {
+			_, ok := parseInviteExpiration(s)
+			return ok
+		},
+	}
+}
 
 var (
 	_ resource.Resource                = &inviteResource{}
@@ -55,9 +113,15 @@ func (r *inviteResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			"expiration_date": schema.StringAttribute{
 				Required: true,
 				MarkdownDescription: "Moment the invite stops working, as an RFC 3339 timestamp such as " +
-					"`2027-01-01T00:00:00Z`.\n\n" +
+					"`2027-01-01T00:00:00Z` or `2027-01-01T02:00:00+02:00`. It must be a whole second, because " +
+					"Homarr stores the date in whole seconds on SQLite: a value such as `2027-01-01T00:00:00.5Z` " +
+					"is rejected, while a zero fraction such as `.000` is allowed. `T` and `Z` must be upper " +
+					"case, and an offset must be written `+hh:mm` or `-hh:mm`.\n\n" +
 					"~> **Note** Homarr has no endpoint to extend an invite, so changing this forces a new " +
 					"invite — and therefore a new token and link.",
+				Validators: []validator.String{
+					inviteExpirationValidator(),
+				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -114,12 +178,15 @@ func (r *inviteResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 
-	expiration, err := time.Parse(time.RFC3339, plan.ExpirationDate.ValueString())
-	if err != nil {
+	// The validator has already refused anything else at plan time; checking
+	// again here keeps a value Homarr would store differently from ever being
+	// sent, should a value reach Create unvalidated.
+	expiration, ok := parseInviteExpiration(plan.ExpirationDate.ValueString())
+	if !ok {
 		resp.Diagnostics.AddAttributeError(
 			path.Root("expiration_date"),
 			"Invalid expiration date",
-			"Expected an RFC 3339 timestamp such as \"2027-01-01T00:00:00Z\": "+err.Error(),
+			fmt.Sprintf("The expiration date %s, got: %q", inviteExpirationRequirement, plan.ExpirationDate.ValueString()),
 		)
 		return
 	}

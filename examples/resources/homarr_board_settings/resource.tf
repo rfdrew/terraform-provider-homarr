@@ -4,9 +4,8 @@ resource "homarr_board" "infra" {
   is_public    = true
 }
 
-# Appearance and behaviour of a board. Note that this resource is write-only:
-# Homarr has no endpoint to read these values back, so changes made in the UI are
-# not detected as drift.
+# Appearance and behaviour of a board. Declared attributes are enforced; the
+# rest are read from Homarr (2.3.0 or newer) and left alone.
 resource "homarr_board_settings" "infra" {
   board_id = homarr_board.infra.id
 

@@ -4,14 +4,20 @@ page_title: "homarr_user Resource - Homarr"
 subcategory: ""
 description: |-
   Manages a Homarr user account authenticated with credentials.
-  Requires an API key belonging to an admin, and Homarr must have the credentials auth provider enabled — accounts backed by LDAP or OIDC cannot be created this way.
+  Requires an API key belonging to an admin, and Homarr must have the credentials auth provider enabled — accounts backed by LDAP or OIDC cannot be created this way. To manage the preferences of an account this resource did not create, use homarr_user_preferences.
+  ~> The preference attributes require Homarr 2.3.0 or newer, which added PATCH /api/users/preferences. They are read from GET /api/users/{id} and so are reported on older releases too, but setting them needs 2.3.0; the home board attributes fall back to the older endpoint automatically.
+  The three references — home_board_id, mobile_home_board_id and default_search_engine_id — are owned outright: leaving one out means the user has none, and a value set in the UI is cleared on the next apply. The other preferences are optional and computed, so leaving them out keeps whatever Homarr has.
 ---
 
 # homarr_user (Resource)
 
 Manages a Homarr user account authenticated with credentials.
 
-Requires an API key belonging to an admin, and Homarr must have the `credentials` auth provider enabled — accounts backed by LDAP or OIDC cannot be created this way.
+Requires an API key belonging to an admin, and Homarr must have the `credentials` auth provider enabled — accounts backed by LDAP or OIDC cannot be created this way. To manage the preferences of an account this resource did not create, use `homarr_user_preferences`.
+
+~> **The preference attributes require Homarr 2.3.0 or newer**, which added `PATCH /api/users/preferences`. They are read from `GET /api/users/{id}` and so are reported on older releases too, but setting them needs 2.3.0; the home board attributes fall back to the older endpoint automatically.
+
+The three references — `home_board_id`, `mobile_home_board_id` and `default_search_engine_id` — are owned outright: leaving one out means the user has none, and a value set in the UI is cleared on the next apply. The other preferences are optional and computed, so leaving them out keeps whatever Homarr has.
 
 ## Example Usage
 
@@ -52,22 +58,32 @@ resource "homarr_user" "operator" {
 - `password` (String, Sensitive) Account password, at least 8 characters. Homarr's UI additionally asks for lowercase, uppercase, digit and special characters; the API enforces only the length.
 
 Changing this value calls Homarr's change-password endpoint. Because the provider cannot read a password back, a password changed outside Terraform is not detected as drift.
-- `username` (String) Login name, between 3 and 255 characters. Homarr lowercases usernames, so the value stored in state may differ in case from the configuration. Renaming is not supported by the API and forces a new user.
+- `username` (String) Login name, between 3 and 255 characters (counted in UTF-16 code units, as Homarr counts them). It must be lowercase and must not start or end with whitespace: Homarr trims and lowercases every username before storing it, so any other spelling would be stored as something other than what is configured. Renaming is not supported by the API and forces a new user.
+
+Older Homarr releases stored usernames as typed. To import such a user, first lowercase the stored names with Homarr's `fix-usernames` CLI command.
 
 ### Optional
 
+- `byte_unit_system` (String) How byte sizes are displayed. One of `binary` (KiB, MiB) or `decimal` (kB, MB).
+- `color_scheme` (String) Interface colour scheme. One of `auto`, `light` or `dark`.
+- `ddg_bangs` (Boolean) Enable DuckDuckGo-style `!bang` shortcuts in the search bar.
+- `default_search_engine_id` (String) Identifier of the search engine used by the search bar. Search engines themselves have no REST surface, so the id has to come from Homarr. Leave it out, or set it to `null`, for none.
 - `email` (String) Optional email address. Must be a valid address; Homarr rejects an explicit null, so leave the attribute out entirely when the user has no email.
 
 ~> **Note** Changing this forces a new user. Homarr's only email-editing endpoint acts on the account behind the API key, so there is no way to change a managed user's email in place.
+- `enable_right_click_on_widgets` (Boolean) Let widgets handle right-clicks instead of the browser context menu.
+- `first_day_of_week` (Number) First day of the week in calendar widgets, `0` for Sunday through `6` for Saturday.
 - `group_ids` (List of String) Identifiers of groups the user joins at creation.
 
 ~> **Note** Group membership is create-only here. Homarr exposes group management solely over tRPC, so the provider can neither read memberships back nor change them later; changing this list forces a new user.
-- `home_board_id` (String) Board shown to this user on desktop. The user must be able to view the board, so it generally has to be public or explicitly shared.
-- `mobile_home_board_id` (String) Board shown to this user on mobile.
+- `home_board_id` (String) Board shown to this user on desktop. Leave it out, or set it to `null`, for no home board. Homarr only checks that the API key's user can view the board, and an admin key can view every board; the user themselves also needs view access, or their home page answers "Board not found".
+- `mobile_home_board_id` (String) Board shown to this user on mobile. Leave it out, or set it to `null`, for no mobile home board. Homarr only checks that the API key's user can view the board, and an admin key can view every board; the user themselves also needs view access, or their home page answers "Board not found".
+- `open_search_in_new_tab` (Boolean) Open search results in a new browser tab.
+- `ping_icons_enabled` (Boolean) Show online-status ping indicators as icons rather than dots.
 
 ### Read-Only
 
-- `id` (String) Homarr-generated identifier of the user. Homarr's create endpoint returns no body, so the provider recovers this by looking the username up immediately afterwards.
+- `id` (String) Homarr-generated identifier of the user. Homarr's create endpoint returns no body, so the provider recovers this by comparing the user list before and after the create; an LDAP or OIDC account with the same name is never mistaken for the new user.
 - `provider_name` (String) Auth provider backing the account, as reported by Homarr. Always `credentials` for users created by this provider.
 
 ## Import

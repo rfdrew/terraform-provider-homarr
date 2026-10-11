@@ -78,9 +78,10 @@ func TestAccBoardSettingsResource_rejectsFractionalOpacity(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				// Homarr's schema calls opacity a number but stores an integer
-				// column, so a fractional value would be silently truncated and
-				// read back different. The attribute is an integer to match.
+				// Homarr's API accepts a fractional opacity, but its UI works in
+				// whole steps and declares the column an integer, so the provider
+				// rejects fractions at plan time rather than reading them back
+				// truncated.
 				Config: providerConfig + `
 resource "homarr_board" "frac" {
   name         = "tfaccfrac"

@@ -5,7 +5,7 @@ subcategory: ""
 description: |-
   Manages the instance-wide board defaults under Management > Settings > Board.
   This is a singleton: Homarr has exactly one such settings object, so declare at most one of these resources. Unlike homarr_board_settings, these values are readable, so drift is detected normally.
-  Creating this resource adopts the existing settings rather than resetting them — only the attributes you specify are sent. Destroying it leaves the settings in place and simply removes them from state.
+  Creating this resource adopts the existing settings rather than resetting them — only the attributes you specify are sent. Because of that, null means "not managed" rather than "none": to clear home_board_id or mobile_home_board_id, set it to "". Destroying this resource leaves the settings in place and simply removes them from state.
 ---
 
 # homarr_server_board_settings (Resource)
@@ -14,7 +14,7 @@ Manages the instance-wide board defaults under *Management > Settings > Board*.
 
 This is a singleton: Homarr has exactly one such settings object, so declare at most one of these resources. Unlike `homarr_board_settings`, these values *are* readable, so drift is detected normally.
 
-Creating this resource adopts the existing settings rather than resetting them — only the attributes you specify are sent. Destroying it leaves the settings in place and simply removes them from state.
+Creating this resource adopts the existing settings rather than resetting them — only the attributes you specify are sent. Because of that, `null` means "not managed" rather than "none": to clear `home_board_id` or `mobile_home_board_id`, set it to `""`. Destroying this resource leaves the settings in place and simply removes them from state.
 
 ## Example Usage
 
@@ -26,9 +26,10 @@ resource "homarr_board" "landing" {
 }
 
 # Instance-wide board defaults. This is a singleton, so declare at most one.
+# Leaving a home board out keeps whatever Homarr has; set it to "" to clear it.
 resource "homarr_server_board_settings" "this" {
   home_board_id        = homarr_board.landing.id
-  mobile_home_board_id = homarr_board.landing.id
+  mobile_home_board_id = ""
 
   enable_status_by_default = true
   force_disable_status     = false
@@ -42,8 +43,8 @@ resource "homarr_server_board_settings" "this" {
 
 - `enable_status_by_default` (Boolean) Whether newly added board items show their online status by default.
 - `force_disable_status` (Boolean) Disable online-status pings across every board, overriding per-board settings.
-- `home_board_id` (String) Board shown to users on desktop when they have no personal home board. Homarr requires it to reference a public board.
-- `mobile_home_board_id` (String) Board shown to users on mobile when they have no personal home board.
+- `home_board_id` (String) Board shown on desktop to anonymous visitors and to users with no personal or group home board. Homarr requires it to reference a public board, and refuses to make that board private while it is selected here. Set to `""` to clear it; leaving it out keeps whatever Homarr has. Once it is cleared, those visitors get "No home board found" instead — on mobile too, unless `mobile_home_board_id` is set. Home boards chosen by users and groups, including *everyone*, are separate settings and are not affected.
+- `mobile_home_board_id` (String) Board shown on mobile to anonymous visitors and to users with no personal or group home board. Homarr requires it to reference a public board, and refuses to make that board private while it is selected here. Set to `""` to clear it; leaving it out keeps whatever Homarr has. Once it is cleared, mobile falls back to `home_board_id`.
 
 ### Read-Only
 

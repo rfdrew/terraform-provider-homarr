@@ -13,9 +13,8 @@ resource "homarr_board" "public_status" {
 }
 
 # is_home and is_mobile_home select the home board of the user behind the API
-# key. They can only be turned on — Homarr has no call that clears a home board
-# — so to move the flag you set it on another board, and to drop it entirely you
-# set homarr_user.home_board_id to null.
+# key. Setting one to false clears that slot again (Homarr 2.3.0 or newer); to
+# move the flag, set it on another board instead.
 resource "homarr_board" "landing" {
   name           = "landing"
   column_count   = 10

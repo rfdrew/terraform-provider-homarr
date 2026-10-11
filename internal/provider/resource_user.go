@@ -2,8 +2,8 @@ package provider
 
 import (
 	"context"
+	"strings"
 
-	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -32,23 +32,13 @@ type userResource struct {
 }
 
 type userModel struct {
-	ID                types.String `tfsdk:"id"`
-	Username          types.String `tfsdk:"username"`
-	Password          types.String `tfsdk:"password"`
-	Email             types.String `tfsdk:"email"`
-	GroupIDs          types.List   `tfsdk:"group_ids"`
-	HomeBoardID       types.String `tfsdk:"home_board_id"`
-	MobileHomeBoardID types.String `tfsdk:"mobile_home_board_id"`
-	Provider          types.String `tfsdk:"provider_name"`
-
-	ColorScheme               types.String `tfsdk:"color_scheme"`
-	ByteUnitSystem            types.String `tfsdk:"byte_unit_system"`
-	FirstDayOfWeek            types.Int64  `tfsdk:"first_day_of_week"`
-	PingIconsEnabled          types.Bool   `tfsdk:"ping_icons_enabled"`
-	EnableRightClickOnWidgets types.Bool   `tfsdk:"enable_right_click_on_widgets"`
-	DefaultSearchEngineID     types.String `tfsdk:"default_search_engine_id"`
-	OpenSearchInNewTab        types.Bool   `tfsdk:"open_search_in_new_tab"`
-	DdgBangs                  types.Bool   `tfsdk:"ddg_bangs"`
+	ID       types.String `tfsdk:"id"`
+	Username types.String `tfsdk:"username"`
+	Password types.String `tfsdk:"password"`
+	Email    types.String `tfsdk:"email"`
+	GroupIDs types.List   `tfsdk:"group_ids"`
+	Provider types.String `tfsdk:"provider_name"`
+	userPreferenceValues
 }
 
 func (r *userResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -64,23 +54,35 @@ func (r *userResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			"~> **The preference attributes require Homarr 2.3.0 or newer**, which added " +
 			"`PATCH /api/users/preferences`. They are read from `GET /api/users/{id}` and so are reported on " +
 			"older releases too, but setting them needs 2.3.0; the home board attributes fall back to the " +
-			"older endpoint automatically.",
-		Attributes: map[string]schema.Attribute{
+			"older endpoint automatically.\n\n" +
+			"The three references — `home_board_id`, `mobile_home_board_id` and `default_search_engine_id` — " +
+			"are owned outright: leaving one out means the user has none, and a value set in the UI is " +
+			"cleared on the next apply. The other preferences are optional and computed, so leaving them out " +
+			"keeps whatever Homarr has.",
+		Attributes: withUserPreferenceAttributes(map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed: true,
 				MarkdownDescription: "Homarr-generated identifier of the user. Homarr's create endpoint returns " +
-					"no body, so the provider recovers this by looking the username up immediately afterwards.",
+					"no body, so the provider recovers this by comparing the user list before and after the " +
+					"create; an LDAP or OIDC account with the same name is never mistaken for the new user.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"username": schema.StringAttribute{
 				Required: true,
-				MarkdownDescription: "Login name, between 3 and 255 characters. Homarr lowercases usernames, so " +
-					"the value stored in state may differ in case from the configuration. Renaming is not " +
-					"supported by the API and forces a new user.",
+				MarkdownDescription: "Login name, between 3 and 255 characters (counted in UTF-16 code units, " +
+					"as Homarr counts them). It must be lowercase and must not start or end with whitespace: " +
+					"Homarr trims and lowercases every username before storing it, so any other spelling would " +
+					"be stored as something other than what is configured. Renaming is not supported by the " +
+					"API and forces a new user.\n\n" +
+					"Older Homarr releases stored usernames as typed. To import such a user, first lowercase " +
+					"the stored names with Homarr's `fix-usernames` CLI command.",
 				Validators: []validator.String{
-					stringvalidator.LengthBetween(3, 255),
+					usernameNormalisedValidator(),
+					// usernameSchema checks the length after normalising, which
+					// usernameNormalisedValidator requires to be a no-op.
+					jsLengthBetweenValidator(3, 255),
 				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
@@ -94,7 +96,7 @@ func (r *userResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 					"Changing this value calls Homarr's change-password endpoint. Because the provider cannot " +
 					"read a password back, a password changed outside Terraform is not detected as drift.",
 				Validators: []validator.String{
-					stringvalidator.LengthBetween(8, 255),
+					jsLengthBetweenValidator(8, 255),
 				},
 			},
 			"email": schema.StringAttribute{
@@ -124,73 +126,55 @@ func (r *userResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			},
 			"home_board_id": schema.StringAttribute{
 				Optional: true,
-				Computed: true,
-				MarkdownDescription: "Board shown to this user on desktop. The user must be able to view the " +
-					"board, so it generally has to be public or explicitly shared.",
+				MarkdownDescription: "Board shown to this user on desktop. Leave it out, or set it to `null`, " +
+					"for no home board. " + homeBoardAccessNote,
+				Validators: []validator.String{
+					stringvalidator.LengthAtLeast(1),
+				},
 			},
 			"mobile_home_board_id": schema.StringAttribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Board shown to this user on mobile.",
+				Optional: true,
+				MarkdownDescription: "Board shown to this user on mobile. Leave it out, or set it to `null`, " +
+					"for no mobile home board. " + homeBoardAccessNote,
+				Validators: []validator.String{
+					stringvalidator.LengthAtLeast(1),
+				},
 			},
 			"provider_name": schema.StringAttribute{
 				Computed: true,
 				MarkdownDescription: "Auth provider backing the account, as reported by Homarr. Always " +
 					"`credentials` for users created by this provider.",
 			},
-			"color_scheme": schema.StringAttribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Interface colour scheme. One of `auto`, `light` or `dark`.",
-				Validators: []validator.String{
-					stringvalidator.OneOf("auto", "light", "dark"),
-				},
-			},
-			"byte_unit_system": schema.StringAttribute{
-				Optional: true,
-				Computed: true,
-				MarkdownDescription: "How byte sizes are displayed. One of `binary` (KiB, MiB) or " +
-					"`decimal` (kB, MB).",
-				Validators: []validator.String{
-					stringvalidator.OneOf("binary", "decimal"),
-				},
-			},
-			"first_day_of_week": schema.Int64Attribute{
-				Optional: true,
-				Computed: true,
-				MarkdownDescription: "First day of the week in calendar widgets, `0` for Sunday through " +
-					"`6` for Saturday.",
-				Validators: []validator.Int64{
-					int64validator.Between(0, 6),
-				},
-			},
-			"ping_icons_enabled": schema.BoolAttribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Show online-status ping indicators as icons rather than dots.",
-			},
-			"enable_right_click_on_widgets": schema.BoolAttribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Let widgets handle right-clicks instead of the browser context menu.",
-			},
 			"default_search_engine_id": schema.StringAttribute{
 				Optional: true,
-				Computed: true,
 				MarkdownDescription: "Identifier of the search engine used by the search bar. Search engines " +
-					"themselves have no REST surface, so the id has to come from Homarr.",
+					"themselves have no REST surface, so the id has to come from Homarr. Leave it out, or set " +
+					"it to `null`, for none.",
+				Validators: []validator.String{
+					stringvalidator.LengthAtLeast(1),
+				},
 			},
-			"open_search_in_new_tab": schema.BoolAttribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Open search results in a new browser tab.",
-			},
-			"ddg_bangs": schema.BoolAttribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Enable DuckDuckGo-style `!bang` shortcuts in the search bar.",
-			},
-		},
+		}),
+	}
+}
+
+// usernameNormalisedValidator rejects a username Homarr would rewrite. Its
+// usernameSchema trims and lowercases the name before storing it, so that
+// logins compare case-insensitively; a configured "TfUser" comes back as
+// "tfuser". username is Required rather than Computed, so the provider cannot
+// adopt the stored spelling: Terraform would reject the apply as an
+// inconsistent result, and an import would plan a replacement on every run.
+//
+// strings.ToLower stands in for String.prototype.toLowerCase. The two can map
+// a character to different results — JavaScript applies the full mappings,
+// turning "İ" into "i" plus a combining dot — but they change exactly the same
+// characters, and whether the value changes at all is the only question asked
+// here.
+func usernameNormalisedValidator() validator.String {
+	return stringCheck{
+		description: "must be lowercase with no leading or trailing whitespace, because Homarr trims and " +
+			"lowercases usernames before storing them",
+		check: func(s string) bool { return s == strings.ToLower(client.JSTrim(s)) },
 	}
 }
 
@@ -202,70 +186,17 @@ func (r *userResource) Configure(_ context.Context, req resource.ConfigureReques
 // untouched: neither can be read back from Homarr.
 func (m *userModel) fromAPI(user *client.UserDetail) {
 	m.ID = types.StringValue(user.ID)
+	// Homarr's stored name can be taken verbatim: the username validators only
+	// admit a value Homarr stores unchanged, so it matches the configuration.
 	m.Username = types.StringValue(user.Name)
 	m.Provider = types.StringValue(user.Provider)
-	m.HomeBoardID = stringValueOrNull(user.HomeBoardID)
-	m.MobileHomeBoardID = stringValueOrNull(user.MobileHomeBoardID)
 
 	// Homarr stores an omitted email as null but a supplied empty string as "".
 	// Normalising "" to null here would fight the configuration, so the raw
 	// value is kept.
 	m.Email = stringValueOrNull(user.Email)
 
-	// colorScheme and byteUnitSystem are absent on releases that predate them,
-	// which decodes to "" rather than a real setting.
-	m.ColorScheme = stringValueOrNullIfEmpty(user.ColorScheme)
-	m.ByteUnitSystem = stringValueOrNullIfEmpty(user.ByteUnitSystem)
-	m.FirstDayOfWeek = types.Int64Value(user.FirstDayOfWeek)
-	m.PingIconsEnabled = types.BoolValue(user.PingIconsEnabled)
-	m.EnableRightClickOnWidgets = types.BoolValue(user.EnableRightClickOnWidgets)
-	m.DefaultSearchEngineID = stringValueOrNull(user.DefaultSearchEngineID)
-	m.OpenSearchInNewTab = types.BoolValue(user.OpenSearchInNewTab)
-	m.DdgBangs = types.BoolValue(user.DdgBangs)
-}
-
-// preferencesPatch collects every preference the plan sets that differs from
-// the prior state. Pass a zero-valued prior to mean "everything the plan sets",
-// which is what creation needs.
-//
-// Nullable references are written as an explicit null when the plan clears
-// them, which is why the patch is a map: an omitted key and a null key mean
-// different things to Homarr.
-func preferencesPatch(plan, prior userModel) client.UserPreferencesPatch {
-	patch := client.UserPreferencesPatch{}
-
-	putString := func(key string, planned, previous types.String, nullable bool) {
-		if planned.Equal(previous) || planned.IsUnknown() {
-			return
-		}
-		switch {
-		case !planned.IsNull():
-			patch[key] = planned.ValueString()
-		case nullable:
-			patch[key] = nil
-		}
-	}
-	putBool := func(key string, planned, previous types.Bool) {
-		if planned.Equal(previous) || planned.IsUnknown() || planned.IsNull() {
-			return
-		}
-		patch[key] = planned.ValueBool()
-	}
-
-	putString("homeBoardId", plan.HomeBoardID, prior.HomeBoardID, true)
-	putString("mobileHomeBoardId", plan.MobileHomeBoardID, prior.MobileHomeBoardID, true)
-	putString("defaultSearchEngineId", plan.DefaultSearchEngineID, prior.DefaultSearchEngineID, true)
-	putString("colorScheme", plan.ColorScheme, prior.ColorScheme, false)
-	putString("byteUnitSystem", plan.ByteUnitSystem, prior.ByteUnitSystem, false)
-	putBool("pingIconsEnabled", plan.PingIconsEnabled, prior.PingIconsEnabled)
-	putBool("enableRightClickOnWidgets", plan.EnableRightClickOnWidgets, prior.EnableRightClickOnWidgets)
-	putBool("openSearchInNewTab", plan.OpenSearchInNewTab, prior.OpenSearchInNewTab)
-	putBool("ddgBangs", plan.DdgBangs, prior.DdgBangs)
-
-	if !plan.FirstDayOfWeek.Equal(prior.FirstDayOfWeek) && !plan.FirstDayOfWeek.IsUnknown() && !plan.FirstDayOfWeek.IsNull() {
-		patch["firstDayOfWeek"] = plan.FirstDayOfWeek.ValueInt64()
-	}
-	return patch
+	m.userPreferenceValues.fromAPI(user.UserPreferenceFields)
 }
 
 // onlyHomeBoards reports whether a patch touches nothing but the two home
@@ -300,29 +231,60 @@ func (r *userResource) applyPreferences(ctx context.Context, id string, patch cl
 		diags.AddError("Unable to update the Homarr user's preferences", err.Error())
 		return
 	}
+	if isBoardNotFound(err) {
+		// The endpoint exists and the user too; a home board was refused, and
+		// the older endpoint would only refuse it again.
+		addBoardNotFoundError(diags, patch, err)
+		return
+	}
 
-	if !onlyHomeBoards(patch) {
+	// Any other 404 means either that the user is gone or that this Homarr predates
+	// 2.3.0 and has no such endpoint. Reading the user tells the two apart, and
+	// also supplies the current home boards the older endpoint needs.
+	user, userErr := r.client.GetUser(ctx, id)
+	if userErr != nil {
 		diags.AddError(
 			"Unable to update the Homarr user's preferences",
-			"PATCH /api/users/preferences is unavailable, which means this Homarr predates 2.3.0. "+
-				"Only home boards can be managed on older releases; remove the other preference "+
-				"attributes or upgrade Homarr. "+err.Error(),
+			"PATCH /api/users/preferences answered 404, and the user could not be read either, so it may "+
+				"have been deleted outside Terraform. "+userErr.Error(),
 		)
 		return
 	}
 
-	home, _ := patch["homeBoardId"].(string)
-	mobile, _ := patch["mobileHomeBoardId"].(string)
-	var homePtr, mobilePtr *string
-	if v, ok := patch["homeBoardId"]; ok && v != nil {
-		homePtr = &home
+	if !onlyHomeBoards(patch) {
+		diags.AddError(
+			"Unable to update the Homarr user's preferences",
+			"The user exists but PATCH /api/users/preferences is unavailable, which means this Homarr "+
+				"predates 2.3.0. Only home boards can be managed on older releases; remove the other "+
+				"preference attributes or upgrade Homarr. "+err.Error(),
+		)
+		return
 	}
-	if v, ok := patch["mobileHomeBoardId"]; ok && v != nil {
-		mobilePtr = &mobile
+
+	// PATCH /api/users/changeHome replaces both slots at once, so a slot the
+	// patch does not mention keeps the value Homarr has now instead of being
+	// sent as null and cleared.
+	home, mobile := user.HomeBoardID, user.MobileHomeBoardID
+	if v, ok := patch["homeBoardId"]; ok {
+		home = patchStringPointer(v)
 	}
-	if fallbackErr := r.client.SetUserHomeBoards(ctx, id, homePtr, mobilePtr); fallbackErr != nil {
+	if v, ok := patch["mobileHomeBoardId"]; ok {
+		mobile = patchStringPointer(v)
+	}
+	if fallbackErr := r.client.SetUserHomeBoards(ctx, id, home, mobile); fallbackErr != nil {
 		diags.AddError("Unable to set the Homarr user's home boards", fallbackErr.Error())
 	}
+}
+
+// patchStringPointer turns a patch value back into the pointer form the older
+// endpoints take: a string becomes a pointer to it, and the explicit null that
+// clears a reference becomes nil.
+func patchStringPointer(v any) *string {
+	s, ok := v.(string)
+	if !ok {
+		return nil
+	}
+	return &s
 }
 
 func (r *userResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -363,7 +325,7 @@ func (r *userResource) Create(ctx context.Context, req resource.CreateRequest, r
 
 	// Home boards and preferences go in one validated-then-written call, so a
 	// freshly created user cannot end up half-configured.
-	r.applyPreferences(ctx, id, preferencesPatch(plan, userModel{}), &resp.Diagnostics)
+	r.applyPreferences(ctx, id, preferencesPatch(plan.userPreferenceValues, userPreferenceValues{}), &resp.Diagnostics)
 	// Fall through even on failure: the user exists and must reach state.
 
 	user, err := r.client.GetUser(ctx, id)
@@ -417,7 +379,7 @@ func (r *userResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		}
 	}
 
-	r.applyPreferences(ctx, id, preferencesPatch(plan, state), &resp.Diagnostics)
+	r.applyPreferences(ctx, id, preferencesPatch(plan.userPreferenceValues, state.userPreferenceValues), &resp.Diagnostics)
 	if resp.Diagnostics.HasError() {
 		return
 	}
