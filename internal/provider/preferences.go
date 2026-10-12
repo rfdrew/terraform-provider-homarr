@@ -31,6 +31,7 @@ type userPreferenceValues struct {
 	EnableRightClickOnWidgets types.Bool   `tfsdk:"enable_right_click_on_widgets"`
 	OpenSearchInNewTab        types.Bool   `tfsdk:"open_search_in_new_tab"`
 	DdgBangs                  types.Bool   `tfsdk:"ddg_bangs"`
+	Header                    types.Object `tfsdk:"header"`
 }
 
 // fromAPI copies the preferences Homarr reports into the model.
@@ -41,6 +42,9 @@ type userPreferenceValues struct {
 //
 // colorScheme and byteUnitSystem are absent from GET /api/users/{id} on
 // releases that predate them, which decodes to "" rather than a real setting.
+//
+// The header is not among the shared fields, because only
+// /api/users/preferences reports it parsed; headerFromAPI copies it.
 func (v *userPreferenceValues) fromAPI(p client.UserPreferenceFields) {
 	v.HomeBoardID = stringValueOrNullKeepingEmpty(p.HomeBoardID, v.HomeBoardID)
 	v.MobileHomeBoardID = stringValueOrNullKeepingEmpty(p.MobileHomeBoardID, v.MobileHomeBoardID)
@@ -52,6 +56,13 @@ func (v *userPreferenceValues) fromAPI(p client.UserPreferenceFields) {
 	v.EnableRightClickOnWidgets = types.BoolValue(p.EnableRightClickOnWidgets)
 	v.OpenSearchInNewTab = types.BoolValue(p.OpenSearchInNewTab)
 	v.DdgBangs = types.BoolValue(p.DdgBangs)
+}
+
+// headerFromAPI copies the header layout from a /api/users/preferences
+// response into the model, keeping the spelling of empty zones that the model
+// already holds.
+func (v *userPreferenceValues) headerFromAPI(h *client.HeaderPreferences) {
+	v.Header = headerValueFromAPI(h, v.Header)
 }
 
 // preferencesPatch collects every preference the plan sets that differs from
@@ -98,6 +109,15 @@ func preferencesPatch(plan, prior userPreferenceValues) client.UserPreferencesPa
 	if !plan.FirstDayOfWeek.Equal(prior.FirstDayOfWeek) && !plan.FirstDayOfWeek.IsUnknown() && !plan.FirstDayOfWeek.IsNull() {
 		patch["firstDayOfWeek"] = plan.FirstDayOfWeek.ValueInt64()
 	}
+
+	// The header goes out whole, all three zones included, so that a zone
+	// emptied in the configuration is emptied in Homarr too rather than kept by
+	// its zone-by-zone merge.
+	if !plan.Header.Equal(prior.Header) {
+		if header, ok := headerPreferencesFromPlan(plan.Header); ok {
+			patch["headerPreferences"] = header
+		}
+	}
 	return patch
 }
 
@@ -105,6 +125,9 @@ func preferencesPatch(plan, prior userPreferenceValues) client.UserPreferencesPa
 // thing in homarr_user and homarr_user_preferences: optional, and computed so
 // that leaving one out keeps whatever Homarr has. The three references are left
 // to each resource, because the two spell "clear it" differently.
+//
+// The header layout is among them too, although homarr_user reads it from a
+// different endpoint than its other preferences: see headerAttribute.
 func userPreferenceAttributes() map[string]schema.Attribute {
 	return map[string]schema.Attribute{
 		"color_scheme": schema.StringAttribute{
@@ -153,6 +176,7 @@ func userPreferenceAttributes() map[string]schema.Attribute {
 			Computed:            true,
 			MarkdownDescription: "Enable DuckDuckGo-style `!bang` shortcuts in the search bar.",
 		},
+		"header": headerAttribute(),
 	}
 }
 

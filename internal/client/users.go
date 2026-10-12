@@ -2,15 +2,22 @@ package client
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 )
 
 // UserSummary is the shape returned by GET /api/users.
+//
+// Name is a pointer because users.name is nullable in Homarr's schema and in
+// the output schemas of both user reads; decoding it into a string would turn a
+// null into "".
 type UserSummary struct {
 	ID            string  `json:"id"`
-	Name          string  `json:"name"`
+	Name          *string `json:"name"`
 	Email         *string `json:"email"`
 	EmailVerified *string `json:"emailVerified"`
 	Image         *string `json:"image"`
@@ -31,10 +38,14 @@ type UserPreferenceFields struct {
 	DdgBangs                  bool    `json:"ddgBangs"`
 }
 
-// UserDetail is the shape returned by GET /api/users/{userId}.
+// UserDetail is the shape returned by GET /api/users/{userId}. Name is nullable
+// for the same reason as on UserSummary.
+//
+// The response also carries headerPreferences, but as the raw JSON text Homarr
+// stores, possibly still in a legacy format; UserPreferences reports it parsed.
 type UserDetail struct {
 	ID            string  `json:"id"`
-	Name          string  `json:"name"`
+	Name          *string `json:"name"`
 	Email         *string `json:"email"`
 	EmailVerified *string `json:"emailVerified"`
 	Image         *string `json:"image"`
@@ -58,13 +69,70 @@ type UserCreateRequest struct {
 // UserPreferences is the shape of GET and PATCH /api/users/preferences, added
 // in Homarr 2.3.0. Both verbs return it in full.
 //
-// The response also carries headerPreferences, which is deliberately not
-// decoded: it is a versioned, deeply nested object that Homarr rewrites on
-// write (it re-appends required items), so it cannot round-trip through a flat
-// Terraform attribute and the provider does not manage it.
+// HeaderPreferences is only decoded here. Homarr stores the header layout as
+// JSON text, which GET /api/users/{userId} hands back verbatim — possibly in one
+// of the two legacy formats — while this endpoint parses it and migrates it to
+// the current version first.
 type UserPreferences struct {
-	UserID string `json:"userId"`
+	UserID            string             `json:"userId"`
+	HeaderPreferences *HeaderPreferences `json:"headerPreferences"`
 	UserPreferenceFields
+}
+
+// HeaderPreferencesVersion is the header layout format Homarr 2.x reads and
+// writes, headerPreferencesVersion in packages/validation/src/header-preferences.ts.
+// Older formats are migrated on read, so a response always carries this one.
+const HeaderPreferencesVersion = 3
+
+// HeaderPreferences is the layout of the header bar above a board: whether it
+// is shown, how the search field and the logo are displayed, and which items
+// sit in each of its three zones.
+//
+// Homarr validates the merged header before every write: items must be unique
+// across the zones, a zone holds at most 100, and the builtin "user" item must
+// be present. A header that passes is stored as sent and reads back unchanged.
+// Homarr does re-append "user" when it is missing, but only to legacy formats
+// it migrates; the current format rejects such a header outright.
+//
+// PATCH /api/users/preferences merges a header patch field by field and zone by
+// zone, keeping any zone the patch leaves out. Sending all three zones, which
+// HeaderZones always does, therefore replaces the layout as a whole.
+type HeaderPreferences struct {
+	Version       int         `json:"version"`
+	Visible       bool        `json:"visible"`
+	SearchDisplay string      `json:"searchDisplay"`
+	LogoDisplay   string      `json:"logoDisplay"`
+	Zones         HeaderZones `json:"zones"`
+}
+
+// HeaderZones are the three zones of the header, from left to right.
+type HeaderZones struct {
+	Left   []HeaderItem `json:"left"`
+	Center []HeaderItem `json:"center"`
+	Right  []HeaderItem `json:"right"`
+}
+
+// MarshalJSON encodes an empty zone as [] rather than null, which Homarr's
+// array schema rejects.
+func (z HeaderZones) MarshalJSON() ([]byte, error) {
+	type zones HeaderZones
+	nonNil := func(items []HeaderItem) []HeaderItem {
+		if items == nil {
+			return []HeaderItem{}
+		}
+		return items
+	}
+	return json.Marshal(zones{Left: nonNil(z.Left), Center: nonNil(z.Center), Right: nonNil(z.Right)})
+}
+
+// HeaderItem is one entry in a header zone: either a builtin control,
+// {"type":"builtin","id":...}, or a shortcut to a board,
+// {"type":"board","boardId":...}. Homarr's item schemas are strict, so only
+// the field that belongs to the type may be sent; the other is omitted.
+type HeaderItem struct {
+	Type    string `json:"type"`
+	ID      string `json:"id,omitempty"`
+	BoardID string `json:"boardId,omitempty"`
 }
 
 // UserPreferencesPatch is a partial update to a user's preferences.
@@ -79,7 +147,15 @@ type UserPreferencesPatch map[string]any
 // GetUserPreferences reads a user's preferences. An empty userID means the user
 // behind the API key; naming another user requires admin.
 //
-// Requires Homarr 2.3.0 or newer.
+// Requires Homarr 2.3.0 or newer. An older release answers with a 404, which
+// callers take to mean exactly that — but only an admin key gets one there. Those
+// releases have no such route, so trpc-to-openapi matches
+// GET /api/users/{userId} instead, with "preferences" as the user id; the path
+// parameter wins over a userId in the query. An admin is told that no such user
+// exists, while any other key is refused a look at another user's details with
+// a 403. That refusal is turned into the 404 an admin gets, since GET
+// /api/users/preferences itself never answers it: from 2.3.0 on, another user's
+// preferences are a 404 too.
 func (c *Client) GetUserPreferences(ctx context.Context, userID string) (*UserPreferences, error) {
 	path := "/api/users/preferences"
 	if userID != "" {
@@ -87,9 +163,39 @@ func (c *Client) GetUserPreferences(ctx context.Context, userID string) (*UserPr
 	}
 	var prefs UserPreferences
 	if err := c.do(ctx, "GET", path, nil, &prefs); err != nil {
+		var apiErr *Error
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden && apiErr.Message == otherUsersDetailsRefused {
+			return nil, &Error{
+				StatusCode: http.StatusNotFound,
+				Code:       "NOT_FOUND",
+				Message: "GET /api/users/preferences does not exist on this Homarr, which predates 2.3.0; it " +
+					"routed the request to GET /api/users/{userId}, which answered: " + apiErr.Message,
+			}
+		}
 		return nil, err
 	}
 	return &prefs, nil
+}
+
+// otherUsersDetailsRefused is the message of the 403 that GET /api/users/{userId}
+// answers when a key that is not an admin's asks for another user.
+const otherUsersDetailsRefused = "You are not allowed to view other users details"
+
+// CurrentUserID returns the id of the user the API key belongs to.
+//
+// Homarr has no "who am I" endpoint, but GET /api/users/preferences without a
+// userId resolves to the caller and echoes its id, and any key may call it.
+//
+// Requires Homarr 2.3.0 or newer; older releases answer 404.
+func (c *Client) CurrentUserID(ctx context.Context) (string, error) {
+	prefs, err := c.GetUserPreferences(ctx, "")
+	if err != nil {
+		return "", err
+	}
+	if prefs.UserID == "" {
+		return "", fmt.Errorf("GET /api/users/preferences did not report the id of the API key's user")
+	}
+	return prefs.UserID, nil
 }
 
 // UpdateUserPreferences applies a partial patch and returns the preferences as
@@ -119,7 +225,8 @@ func (c *Client) UpdateUserPreferences(ctx context.Context, userID string, patch
 	return &prefs, nil
 }
 
-// ListUsers returns every user. Requires an admin API key.
+// ListUsers returns every user. Requires an admin API key; ListUsersWithAnyKey
+// does not.
 func (c *Client) ListUsers(ctx context.Context) ([]UserSummary, error) {
 	var users []UserSummary
 	if err := c.do(ctx, "GET", "/api/users", nil, &users); err != nil {
@@ -151,6 +258,15 @@ func (c *Client) GetUser(ctx context.Context, id string) (*UserDetail, error) {
 // Anything other than exactly one such user is an error, even though the
 // account now exists: guessing between several is the very mistake this
 // avoids, and with none there is no id that is safe to return.
+//
+// A failed POST can leave the account behind as well. Homarr inserts the user
+// row first and the group memberships afterwards, outside a transaction, so a
+// duplicate or unknown group id fails the request with a 500 once the account
+// already exists — and that account then holds the name, so a retry answers
+// 409. For any failure but a 409 the users are listed again, and if exactly one
+// new user of that name appeared, its id is returned together with the error.
+// A caller must therefore treat a non-empty id as an existing account even when
+// the error is not nil.
 func (c *Client) CreateUser(ctx context.Context, req UserCreateRequest) (string, error) {
 	before, err := c.ListUsers(ctx)
 	if err != nil {
@@ -162,19 +278,17 @@ func (c *Client) CreateUser(ctx context.Context, req UserCreateRequest) (string,
 	}
 
 	if err := c.do(ctx, "POST", "/api/users", req, nil); err != nil {
-		return "", err
+		if IsConflict(err) {
+			return "", err
+		}
+		return c.recoverFailedCreate(ctx, req.Username, existing, err)
 	}
 
 	after, err := c.ListUsers(ctx)
 	if err != nil {
 		return "", fmt.Errorf("user %q was created but its id could not be recovered: %w", req.Username, err)
 	}
-	var candidates []string
-	for _, u := range after {
-		if !existing[u.ID] && sameUsername(u.Name, req.Username) {
-			candidates = append(candidates, u.ID)
-		}
-	}
+	candidates := newUsersNamed(after, existing, req.Username)
 
 	switch len(candidates) {
 	case 1:
@@ -190,6 +304,36 @@ func (c *Client) CreateUser(ctx context.Context, req UserCreateRequest) (string,
 	}
 }
 
+// recoverFailedCreate looks for an account that a failed POST /api/users
+// created anyway, and returns its id along with postErr when there is exactly
+// one. Otherwise it returns postErr alone: most failures, a 400 for instance,
+// create nothing, and several candidates cannot be told apart safely.
+func (c *Client) recoverFailedCreate(ctx context.Context, username string, existing map[string]bool, postErr error) (string, error) {
+	after, err := c.ListUsers(ctx)
+	if err != nil {
+		return "", postErr
+	}
+	candidates := newUsersNamed(after, existing, username)
+	if len(candidates) != 1 {
+		return "", postErr
+	}
+	return candidates[0], fmt.Errorf("user %q was created (id %s) but Homarr then failed the request, most likely "+
+		"while adding the user to its groups — a duplicate or unknown group id fails it after the account exists: %w",
+		username, candidates[0], postErr)
+}
+
+// newUsersNamed returns the ids of the users in after that are not in existing
+// and carry the name Homarr made of username.
+func newUsersNamed(after []UserSummary, existing map[string]bool, username string) []string {
+	var candidates []string
+	for _, u := range after {
+		if !existing[u.ID] && u.Name != nil && sameUsername(*u.Name, username) {
+			candidates = append(candidates, u.ID)
+		}
+	}
+	return candidates
+}
+
 // sameUsername reports whether stored, a name as GET /api/users returns it, is
 // what Homarr made of configured when creating the user.
 //
@@ -202,6 +346,49 @@ func (c *Client) CreateUser(ctx context.Context, req UserCreateRequest) (string,
 // user, because CreateUser only considers users that did not exist before.
 func sameUsername(stored, configured string) bool {
 	return strings.EqualFold(stored, JSTrim(configured))
+}
+
+// UpdateUserProfile renames a credentials user and sets or changes its email,
+// through PUT /api/users/profile. The endpoint returns no body.
+//
+// name is required even when only the email changes. A nil email is omitted and
+// leaves the stored one alone, and so would an empty string: Homarr writes the
+// email only when the new value is non-empty and differs, so an email can be
+// changed but never cleared. Changing it also resets emailVerified.
+//
+// An admin may edit any user and anyone may edit themselves, but only
+// credentials accounts: LDAP and OIDC users answer 403. A name another
+// credentials user already has answers 409.
+func (c *Client) UpdateUserProfile(ctx context.Context, id, name string, email *string) error {
+	body := struct {
+		ID    string  `json:"id"`
+		Name  string  `json:"name"`
+		Email *string `json:"email,omitempty"`
+	}{
+		ID:    id,
+		Name:  name,
+		Email: email,
+	}
+	return c.do(ctx, "PUT", "/api/users/profile", body, nil)
+}
+
+// SetUserProfileImage sets a user's profile image through
+// PUT /api/users/profileImage, or removes it when image is nil. The endpoint
+// returns no body.
+//
+// Homarr takes only a base64 data URL of a PNG, JPEG, GIF or WebP picture, at
+// most 350,000 characters long, and stores it verbatim, so GET /api/users/{id}
+// reports it back unchanged. An admin may set any user's image and anyone their
+// own; unlike a rename, this works for LDAP and OIDC accounts too.
+func (c *Client) SetUserProfileImage(ctx context.Context, userID string, image *string) error {
+	body := struct {
+		UserID string  `json:"userId"`
+		Image  *string `json:"image"`
+	}{
+		UserID: userID,
+		Image:  image,
+	}
+	return c.do(ctx, "PUT", "/api/users/profileImage", body, nil)
 }
 
 // ChangeUserPassword sets a new password for a user.
@@ -239,6 +426,26 @@ func (c *Client) SetUserHomeBoards(ctx context.Context, userID string, homeBoard
 		MobileHomeBoardID: mobileHomeBoardID,
 	}
 	return c.do(ctx, "PATCH", "/api/users/changeHome", body, nil)
+}
+
+// SetUserSearchPreferences sets a user's default search engine, whether search
+// results open in a new tab, and whether DuckDuckGo bangs are enabled, through
+// PATCH /api/users/search-preferences, which every Homarr 2.x release has. All
+// three fields are required by the schema and written together; the search
+// engine may be null to clear it.
+func (c *Client) SetUserSearchPreferences(ctx context.Context, userID string, defaultSearchEngineID *string, openInNewTab, ddgBangsEnabled bool) error {
+	body := struct {
+		UserID                string  `json:"userId"`
+		DefaultSearchEngineID *string `json:"defaultSearchEngineId"`
+		OpenInNewTab          bool    `json:"openInNewTab"`
+		DdgBangsEnabled       bool    `json:"ddgBangsEnabled"`
+	}{
+		UserID:                userID,
+		DefaultSearchEngineID: defaultSearchEngineID,
+		OpenInNewTab:          openInNewTab,
+		DdgBangsEnabled:       ddgBangsEnabled,
+	}
+	return c.do(ctx, "PATCH", "/api/users/search-preferences", body, nil)
 }
 
 // DeleteUser removes a user.

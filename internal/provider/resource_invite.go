@@ -76,6 +76,7 @@ var (
 	_ resource.Resource                = &inviteResource{}
 	_ resource.ResourceWithConfigure   = &inviteResource{}
 	_ resource.ResourceWithImportState = &inviteResource{}
+	_ resource.ResourceWithIdentity    = &inviteResource{}
 )
 
 // NewInviteResource returns the homarr_invite resource.
@@ -101,7 +102,21 @@ func (r *inviteResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages a Homarr registration invite.\n\n" +
 			"Requires an admin API key and the `credentials` auth provider. The invite link a person follows is " +
-			"`https://<your-homarr>/auth/invite/<id>?token=<token>`.",
+			"`https://<your-homarr>/auth/invite/<id>?token=<token>`.\n\n" +
+			"**Lifecycle.** An invite works once. Registering through it deletes it, so the next refresh drops " +
+			"it from state and the apply after that creates a new invite, with a new token and link. Remove the " +
+			"resource once its invite has been used, or rotate it on purpose — for instance by taking " +
+			"`expiration_date` from a `time_rotating` resource, since changing it replaces the invite.\n\n" +
+			"An invite stops working at `expiration_date`, but Homarr never deletes expired invites: they stay " +
+			"in Homarr, and in state, until destroyed. Homarr also accepts an expiration date in the past, which " +
+			"creates an invite that can never be used.\n\n" +
+			"Homarr deletes an invite together with the user that created it — the user behind the API key. " +
+			"Deleting that user, for example in the UI, removes every invite it created, and the next apply " +
+			"recreates them with new tokens and links. `homarr_user` refuses to destroy or replace the user " +
+			"behind the provider's own key on Homarr 2.3.0 and newer, so through Terraform this happens only " +
+			"when the invites were created with another key.\n\n" +
+			"The `token` exists in state only when Terraform created the invite: Homarr returns it once, in the " +
+			"creation response, so an imported invite has none.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -146,6 +161,10 @@ func (r *inviteResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 			},
 		},
 	}
+}
+
+func (r *inviteResource) IdentitySchema(_ context.Context, _ resource.IdentitySchemaRequest, resp *resource.IdentitySchemaResponse) {
+	resp.IdentitySchema = idIdentitySchema("id", "Homarr-generated identifier of the invite.")
 }
 
 func (r *inviteResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -202,12 +221,26 @@ func (r *inviteResource) Create(ctx context.Context, req resource.CreateRequest,
 
 	invite, err := r.client.GetInvite(ctx, id)
 	if err != nil {
-		resp.Diagnostics.AddError("Unable to read Homarr invite back after creation", err.Error())
+		// The invite exists, and its token will never be returned again, so
+		// both go into state before the error is reported. Terraform then
+		// keeps the invite as tainted instead of losing track of it, and the
+		// token can still be read from state.
+		plan.CreatorID = types.StringNull()
+		plan.CreatorName = types.StringNull()
+		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+		setIdentity(ctx, resp.Identity, "id", id, &resp.Diagnostics)
+		resp.Diagnostics.AddError(
+			"Unable to read Homarr invite back after creation",
+			"Homarr created invite "+id+" and its id and token were saved to state, but reading it back "+
+				"failed, so it is marked tainted: the next apply replaces it with a new invite and token. "+
+				"Untaint it to keep this one instead. "+err.Error(),
+		)
 		return
 	}
 	plan.fromAPI(invite)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	setIdentity(ctx, resp.Identity, "id", id, &resp.Diagnostics)
 }
 
 func (r *inviteResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -216,6 +249,10 @@ func (r *inviteResource) Read(ctx context.Context, req resource.ReadRequest, res
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	// Before the lookup, so that a refresh finding the invite gone still
+	// reports one; see setIdentity.
+	setIdentity(ctx, resp.Identity, "id", state.ID.ValueString(), &resp.Diagnostics)
 
 	invite, err := r.client.GetInvite(ctx, state.ID.ValueString())
 	if err != nil {
@@ -240,6 +277,7 @@ func (r *inviteResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	setIdentity(ctx, resp.Identity, "id", plan.ID.ValueString(), &resp.Diagnostics)
 }
 
 func (r *inviteResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -254,10 +292,20 @@ func (r *inviteResource) Delete(ctx context.Context, req resource.DeleteRequest,
 	}
 }
 
-// ImportState imports an invite by id. The token cannot be recovered — Homarr
-// omits it from the list response — so it stays null in state.
+// ImportState imports an invite by id, given either as the import id or, from
+// Terraform 1.12, as the identity of an import block. The token cannot be
+// recovered — Homarr omits it from the list response — so it stays null in
+// state.
 func (r *inviteResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	id, _ := importedID(ctx, req, "id", &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), id)...)
+	setIdentity(ctx, resp.Identity, "id", id, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 	resp.Diagnostics.AddWarning(
 		"The imported invite's token is unavailable",
 		"Homarr returns an invite token only once, when the invite is created, so `token` will be null for "+

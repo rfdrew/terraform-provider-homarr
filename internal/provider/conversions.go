@@ -23,6 +23,16 @@ func stringValueOrNull(s *string) types.String {
 	return types.StringValue(*s)
 }
 
+// emailValueOrNull maps a user's email to Terraform. Homarr stores an omitted
+// email as null but one supplied as "", as the UI does, verbatim; both mean the
+// user has none, so both read as null.
+func emailValueOrNull(s *string) types.String {
+	if s == nil || *s == "" {
+		return types.StringNull()
+	}
+	return types.StringValue(*s)
+}
+
 // boolPointerOrNil converts a Terraform bool into a pointer, so that unset
 // attributes can be omitted from a partial patch body.
 func boolPointerOrNil(v types.Bool) *bool {

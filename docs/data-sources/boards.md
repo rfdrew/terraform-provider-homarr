@@ -15,6 +15,7 @@ Lists every Homarr board visible to the configured API key.
 ```terraform
 data "homarr_boards" "all" {}
 
+# Boards are sorted by name, so the output is stable between runs.
 output "public_boards" {
   value = [for board in data.homarr_boards.all.boards : board.name if board.is_public]
 }
@@ -25,7 +26,7 @@ output "public_boards" {
 
 ### Read-Only
 
-- `boards` (Attributes List) All boards, in the order Homarr returns them. (see [below for nested schema](#nestedatt--boards))
+- `boards` (Attributes List) All boards, sorted by name case-insensitively, then by the exact name, so that names differing only in case keep a fixed order. Homarr itself returns them in no particular order. (see [below for nested schema](#nestedatt--boards))
 
 <a id="nestedatt--boards"></a>
 ### Nested Schema for `boards`

@@ -14,7 +14,8 @@ func userList(t *testing.T, idsAndNames ...string) string {
 	t.Helper()
 	users := []UserSummary{}
 	for i := 0; i+1 < len(idsAndNames); i += 2 {
-		users = append(users, UserSummary{ID: idsAndNames[i], Name: idsAndNames[i+1]})
+		name := idsAndNames[i+1]
+		users = append(users, UserSummary{ID: idsAndNames[i], Name: &name})
 	}
 	raw, err := json.Marshal(users)
 	if err != nil {

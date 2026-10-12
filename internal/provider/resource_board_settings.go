@@ -27,6 +27,7 @@ var (
 	_ resource.ResourceWithConfigure    = &boardSettingsResource{}
 	_ resource.ResourceWithImportState  = &boardSettingsResource{}
 	_ resource.ResourceWithUpgradeState = &boardSettingsResource{}
+	_ resource.ResourceWithIdentity     = &boardSettingsResource{}
 )
 
 // NewBoardSettingsResource returns the homarr_board_settings resource.
@@ -231,6 +232,12 @@ func (r *boardSettingsResource) Schema(_ context.Context, _ resource.SchemaReque
 	}
 }
 
+// IdentitySchema names the settings by board_id, the attribute configurations
+// set; id only repeats it.
+func (r *boardSettingsResource) IdentitySchema(_ context.Context, _ resource.IdentitySchemaRequest, resp *resource.IdentitySchemaResponse) {
+	resp.IdentitySchema = idIdentitySchema("board_id", "Identifier of the board these settings belong to.")
+}
+
 func (r *boardSettingsResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	r.client = clientFromProviderData(req.ProviderData, &resp.Diagnostics)
 }
@@ -381,6 +388,7 @@ func (r *boardSettingsResource) Create(ctx context.Context, req resource.CreateR
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	setIdentity(ctx, resp.Identity, "board_id", plan.BoardID.ValueString(), &resp.Diagnostics)
 }
 
 // Read refreshes the settings from Homarr.
@@ -398,6 +406,10 @@ func (r *boardSettingsResource) Read(ctx context.Context, req resource.ReadReque
 	}
 
 	boardID := state.BoardID.ValueString()
+	// Before the lookup, so that a refresh finding the board gone still reports
+	// one; see setIdentity.
+	setIdentity(ctx, resp.Identity, "board_id", boardID, &resp.Diagnostics)
+
 	settings, err := r.client.GetBoardSettings(ctx, boardID)
 	if err == nil {
 		state.fromAPI(settings)
@@ -441,6 +453,7 @@ func (r *boardSettingsResource) Update(ctx context.Context, req resource.UpdateR
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	setIdentity(ctx, resp.Identity, "board_id", plan.BoardID.ValueString(), &resp.Diagnostics)
 }
 
 // Delete drops the resource from state without touching the server.
@@ -457,10 +470,17 @@ func (r *boardSettingsResource) Delete(ctx context.Context, _ resource.DeleteReq
 	)
 }
 
-// ImportState imports by board id; Read then populates every attribute.
+// ImportState imports by board id, given either as the import id or, from
+// Terraform 1.12, as the identity of an import block; Read then populates every
+// attribute.
 func (r *boardSettingsResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("board_id"), req.ID)...)
+	boardID, _ := importedID(ctx, req, "board_id", &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), boardID)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("board_id"), boardID)...)
+	setIdentity(ctx, resp.Identity, "board_id", boardID, &resp.Diagnostics)
 }
 
 // UpgradeState migrates state written before opacity became an integer.

@@ -171,6 +171,54 @@ func TestUserPreferencesFallbackClearsOnlyTheNamedSlot(t *testing.T) {
 	}
 }
 
+// Before 2.3.0 a default search engine picked in the UI is cleared through
+// PATCH /api/users/search-preferences, which also needs the two other search
+// preferences: they keep the values Homarr has.
+func TestUserPreferencesFallbackClearsTheSearchEngine(t *testing.T) {
+	fake := newFakeHomarr()
+	fake.reply("GET /api/users/u1", 200,
+		`{"id":"u1","name":"u","defaultSearchEngineId":"se1","openSearchInNewTab":false,"ddgBangs":true}`)
+	fake.reply("PATCH /api/users/search-preferences", 200, ``)
+	r := &userResource{client: fake.client(t)}
+
+	var diags diag.Diagnostics
+	r.applyPreferences(context.Background(), "u1", client.UserPreferencesPatch{"defaultSearchEngineId": nil}, &diags)
+	requireNoErrors(t, diags)
+
+	body := fake.body(t, "PATCH /api/users/search-preferences")
+	engine, present := body["defaultSearchEngineId"]
+	if body["userId"] != "u1" || !present || engine != nil || body["openInNewTab"] != false || body["ddgBangsEnabled"] != true {
+		t.Fatalf("search-preferences body = %v, want userId u1, an explicit null search engine, and "+
+			"openInNewTab false and ddgBangsEnabled true kept", body)
+	}
+	if fake.called("PATCH /api/users/changeHome") {
+		t.Fatal("touched the home boards for a patch that does not mention them")
+	}
+}
+
+func TestUserPreferencesFallbackSendsHomeBoardsAndSearchPreferences(t *testing.T) {
+	fake := newFakeHomarr()
+	fake.reply("GET /api/users/u1", 200, `{"id":"u1","name":"u","homeBoardId":"A","mobileHomeBoardId":"B",`+
+		`"defaultSearchEngineId":"se1","openSearchInNewTab":false,"ddgBangs":false}`)
+	fake.reply("PATCH /api/users/changeHome", 200, ``)
+	fake.reply("PATCH /api/users/search-preferences", 200, ``)
+	r := &userResource{client: fake.client(t)}
+
+	var diags diag.Diagnostics
+	r.applyPreferences(context.Background(), "u1",
+		client.UserPreferencesPatch{"homeBoardId": "C", "openSearchInNewTab": true, "defaultSearchEngineId": "se2"}, &diags)
+	requireNoErrors(t, diags)
+
+	home := fake.body(t, "PATCH /api/users/changeHome")
+	if home["homeBoardId"] != "C" || home["mobileHomeBoardId"] != "B" {
+		t.Errorf("changeHome body = %v, want homeBoardId C and mobileHomeBoardId B kept", home)
+	}
+	search := fake.body(t, "PATCH /api/users/search-preferences")
+	if search["defaultSearchEngineId"] != "se2" || search["openInNewTab"] != true || search["ddgBangsEnabled"] != false {
+		t.Errorf("search-preferences body = %v, want se2, openInNewTab true and ddgBangsEnabled false kept", search)
+	}
+}
+
 func TestUserPreferences404ForAMissingUserIsNotBlamedOnTheVersion(t *testing.T) {
 	fake := newFakeHomarr() // both the PATCH and the user read 404
 	r := &userResource{client: fake.client(t)}
@@ -192,11 +240,19 @@ func TestUserPreferences404ForAMissingUserIsNotBlamedOnTheVersion(t *testing.T) 
 func TestUserPreferencesOnOldHomarrRejectsNonHomeFields(t *testing.T) {
 	fake := newFakeHomarr()
 	fake.reply("GET /api/users/u1", 200, `{"id":"u1","name":"u"}`)
+	fake.reply("PATCH /api/users/changeHome", 200, ``)
+	fake.reply("PATCH /api/users/search-preferences", 200, ``)
 	r := &userResource{client: fake.client(t)}
 
 	var diags diag.Diagnostics
-	r.applyPreferences(context.Background(), "u1", client.UserPreferencesPatch{"colorScheme": "dark"}, &diags)
+	r.applyPreferences(context.Background(), "u1",
+		client.UserPreferencesPatch{"colorScheme": "dark", "homeBoardId": "A", "defaultSearchEngineId": nil}, &diags)
 	requireErrorContaining(t, diags, "predates 2.3.0")
+	// The error names what cannot be set, and nothing is half-applied.
+	requireErrorContaining(t, diags, "Setting color_scheme requires")
+	if fake.called("PATCH /api/users/changeHome") || fake.called("PATCH /api/users/search-preferences") {
+		t.Fatal("applied part of a patch that the old release cannot apply in full")
+	}
 }
 
 func TestPreferencesPatchClearsNullableReferences(t *testing.T) {
@@ -267,6 +323,7 @@ func userPreferencesReadState(t *testing.T) (tfsdk.State, schema.Schema) {
 			DefaultSearchEngineID:     types.StringNull(),
 			OpenSearchInNewTab:        types.BoolValue(true),
 			DdgBangs:                  types.BoolValue(true),
+			Header:                    types.ObjectNull(headerAttrTypes),
 		},
 	}), s
 }
@@ -571,6 +628,51 @@ func TestBoardCreateHoldsTheHomeBoardLock(t *testing.T) {
 	}
 }
 
+// homarr_user and homarr_user_preferences can set the home boards of the user
+// behind the API key, which homarr_board selects and clears under homeBoardMu;
+// their writes must not slip between a board's check and its clear.
+func TestPreferenceWritesOfAHomeBoardHoldTheHomeBoardLock(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		patch client.UserPreferencesPatch
+		want  bool
+	}{
+		{"home board", client.UserPreferencesPatch{"homeBoardId": "b1"}, true},
+		{"cleared mobile home board", client.UserPreferencesPatch{"mobileHomeBoardId": nil}, true},
+		{"other preference", client.UserPreferencesPatch{"colorScheme": "dark"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lockHeld := false
+			fake := newFakeHomarr()
+			fake.handle("PATCH /api/users/preferences", func(w http.ResponseWriter, _ *http.Request) {
+				if homeBoardMu.TryLock() {
+					homeBoardMu.Unlock()
+				} else {
+					lockHeld = true
+				}
+				_, _ = io.WriteString(w, `{"userId":"u1"}`)
+			})
+
+			var diags diag.Diagnostics
+			(&userResource{client: fake.client(t)}).applyPreferences(context.Background(), "u1", tc.patch, &diags)
+			requireNoErrors(t, diags)
+			heldByUser := lockHeld
+
+			lockHeld = false
+			plan := userPreferencesModel{UserID: types.StringUnknown()}
+			if err := (&userPreferencesResource{client: fake.client(t)}).apply(context.Background(), &plan, tc.patch); err != nil {
+				t.Fatal(err)
+			}
+			heldByPreferences := lockHeld
+
+			if heldByUser != tc.want || heldByPreferences != tc.want {
+				t.Fatalf("homeBoardMu held by homarr_user %v and homarr_user_preferences %v, want %v",
+					heldByUser, heldByPreferences, tc.want)
+			}
+		})
+	}
+}
+
 // --- empty settings and whitespace -------------------------------------------
 
 func boardIDOnlyPlan() boardSettingsModel {
@@ -653,6 +755,7 @@ func TestUserPreferencesResourceReportsARefusedHomeBoard(t *testing.T) {
 	model.FirstDayOfWeek = types.Int64Unknown()
 	model.PingIconsEnabled, model.EnableRightClickOnWidgets = types.BoolUnknown(), types.BoolUnknown()
 	model.OpenSearchInNewTab, model.DdgBangs = types.BoolUnknown(), types.BoolUnknown()
+	model.Header = types.ObjectUnknown(headerAttrTypes)
 
 	resp := resource.CreateResponse{State: tfsdk.State{Schema: s, Raw: tftypes.NewValue(s.Type().TerraformType(context.Background()), nil)}}
 	r.Create(context.Background(), resource.CreateRequest{Plan: planOf(t, s, model)}, &resp)

@@ -9,6 +9,13 @@ VERSION ?= dev
 # would break the docs check whenever a new release came out.
 TFPLUGINDOCS_VERSION ?= v0.25.0
 
+# tfplugindocs renders from the schema of whichever Terraform it runs. Releases
+# before 1.14 report no actions or list resources, and tfplugindocs then
+# deletes docs/actions/ and docs/list-resources/ without complaint, so it is
+# told to download this release instead of using the one on PATH. It must be an
+# exact version: tfplugindocs refuses wildcards such as 1.14.x.
+TERRAFORM_DOCS_VERSION ?= 1.14.0
+
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -47,7 +54,8 @@ homarr-down: ## Remove the throwaway Homarr container
 docs: ## Regenerate docs/ from the schemas and examples
 	go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@$(TFPLUGINDOCS_VERSION) generate \
 		--provider-name homarr \
-		--rendered-provider-name Homarr
+		--rendered-provider-name Homarr \
+		--tf-version $(TERRAFORM_DOCS_VERSION)
 
 clean: ## Remove build artefacts
 	rm -f $(BINARY)

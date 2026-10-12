@@ -194,3 +194,144 @@ resource "homarr_board" "test" {
 		},
 	})
 }
+
+func TestAccBoardResource_baseLayoutIDAndImportByName(t *testing.T) {
+	var layoutID string
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				// POST /api/boards returns the base layout's id, and only then.
+				Config: providerConfig + `
+resource "homarr_board" "test" {
+  name         = "tfacclayout"
+  column_count = 12
+}
+`,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrSet("homarr_board.test", "base_layout_id"),
+					captureAttr("homarr_board.test", "base_layout_id", &layoutID),
+				),
+			},
+			{
+				// No REST read returns it again, so it has to survive updates
+				// from state.
+				Config: providerConfig + `
+resource "homarr_board" "test" {
+  name         = "tfacclayout2"
+  column_count = 12
+  is_public    = true
+}
+`,
+				Check: resource.TestCheckResourceAttrPtr("homarr_board.test", "base_layout_id", &layoutID),
+			},
+			{
+				// Import by name, matched case-insensitively. The layout id
+				// cannot be recovered by an import.
+				ResourceName:            "homarr_board.test",
+				ImportState:             true,
+				ImportStateId:           "name=TFACCLAYOUT2,12",
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"base_layout_id"},
+				ImportStateCheck:        checkImportedBoardWithoutLayoutID("tfacclayout2"),
+			},
+		},
+	})
+}
+
+func TestAccBoardResource_nameCheck(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "homarr_board" "first" {
+  name         = "tfaccnamecase"
+  column_count = 10
+}
+`,
+			},
+			{
+				// Homarr's REST create would accept a name differing only in
+				// case; the provider refuses it right before creating. The
+				// plan only warns.
+				Config: providerConfig + `
+resource "homarr_board" "first" {
+  name         = "tfaccnamecase"
+  column_count = 10
+}
+
+resource "homarr_board" "second" {
+  name         = "TFACCNAMECASE"
+  column_count = 10
+}
+`,
+				ExpectError: regexpMustCompile(`Board name already taken`),
+			},
+			{
+				// Replacing a board keeps its name; the board being replaced
+				// must not count as a clash.
+				Config: providerConfig + `
+resource "homarr_board" "first" {
+  name         = "tfaccnamecase"
+  column_count = 12
+}
+`,
+				Check: resource.TestCheckResourceAttr("homarr_board.first", "column_count", "12"),
+			},
+			{
+				// A tainted board is replaced without a plan against its
+				// prior state, so the plan sees its own board under the same
+				// name. That is a warning, and the replacement goes ahead.
+				Config: providerConfig + `
+resource "homarr_board" "first" {
+  name         = "tfaccnamecase"
+  column_count = 12
+}
+`,
+				Taint: []string{"homarr_board.first"},
+				Check: resource.TestCheckResourceAttr("homarr_board.first", "name", "tfaccnamecase"),
+			},
+		},
+	})
+}
+
+// A name freed earlier in the same apply can be taken by a new board, although
+// the plan still sees the old board holding it.
+func TestAccBoardResource_nameFreedInTheSameApply(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig + `
+resource "homarr_board" "old" {
+  name         = "tfaccnamefreed"
+  column_count = 10
+}
+`,
+			},
+			{
+				Config: providerConfig + `
+resource "homarr_board" "old" {
+  name         = "tfaccnamefreed_old"
+  column_count = 10
+}
+
+resource "homarr_board" "new" {
+  name         = "tfaccnamefreed"
+  column_count = 10
+
+  depends_on = [homarr_board.old]
+}
+`,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("homarr_board.old", "name", "tfaccnamefreed_old"),
+					resource.TestCheckResourceAttr("homarr_board.new", "name", "tfaccnamefreed"),
+				),
+			},
+		},
+	})
+}

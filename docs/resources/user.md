@@ -4,20 +4,23 @@ page_title: "homarr_user Resource - Homarr"
 subcategory: ""
 description: |-
   Manages a Homarr user account authenticated with credentials.
-  Requires an API key belonging to an admin, and Homarr must have the credentials auth provider enabled — accounts backed by LDAP or OIDC cannot be created this way. To manage the preferences of an account this resource did not create, use homarr_user_preferences.
-  ~> The preference attributes require Homarr 2.3.0 or newer, which added PATCH /api/users/preferences. They are read from GET /api/users/{id} and so are reported on older releases too, but setting them needs 2.3.0; the home board attributes fall back to the older endpoint automatically.
-  The three references — home_board_id, mobile_home_board_id and default_search_engine_id — are owned outright: leaving one out means the user has none, and a value set in the UI is cleared on the next apply. The other preferences are optional and computed, so leaving them out keeps whatever Homarr has.
+  Requires an API key belonging to an admin, and Homarr must have the credentials auth provider enabled. Accounts backed by LDAP or OIDC can be neither created nor managed this way — Homarr refuses to rename them or change their email or password — so importing one is an error. One imported by an earlier version of the provider is still read, with a warning, and a plan that would rename it or change its email or password is refused; remove it from state with a removed block or terraform state rm. To manage the preferences of such an account, or of any account this resource did not create, use homarr_user_preferences.
+  ~> The preference attributes require Homarr 2.3.0 or newer, which added PATCH /api/users/preferences. They are read from GET /api/users/{id} and so are reported on older releases too, but setting them needs 2.3.0. The home boards and the search preferences — default_search_engine_id, open_search_in_new_tab and ddg_bangs — fall back to older endpoints automatically. header is only reported from 2.3.0 on.
+  The three references — home_board_id, mobile_home_board_id and default_search_engine_id — are owned outright: leaving one out means the user has none, and a value set in the UI is cleared on the next apply; to keep one, set it in the configuration or list it in the ignore_changes lifecycle argument. The other preferences are optional and computed, so leaving them out keeps whatever Homarr has.
+  ~> Destroying or replacing the user that owns the provider's API key is refused. Homarr deletes a user's API keys along with the account, which would cut Terraform off from Homarr in the middle of the apply. To stop managing that account, remove it from state with a removed block or terraform state rm. The check needs Homarr 2.3.0 or newer to tell which user owns the key.
 ---
 
 # homarr_user (Resource)
 
 Manages a Homarr user account authenticated with credentials.
 
-Requires an API key belonging to an admin, and Homarr must have the `credentials` auth provider enabled — accounts backed by LDAP or OIDC cannot be created this way. To manage the preferences of an account this resource did not create, use `homarr_user_preferences`.
+Requires an API key belonging to an admin, and Homarr must have the `credentials` auth provider enabled. Accounts backed by LDAP or OIDC can be neither created nor managed this way — Homarr refuses to rename them or change their email or password — so importing one is an error. One imported by an earlier version of the provider is still read, with a warning, and a plan that would rename it or change its email or password is refused; remove it from state with a `removed` block or `terraform state rm`. To manage the preferences of such an account, or of any account this resource did not create, use `homarr_user_preferences`.
 
-~> **The preference attributes require Homarr 2.3.0 or newer**, which added `PATCH /api/users/preferences`. They are read from `GET /api/users/{id}` and so are reported on older releases too, but setting them needs 2.3.0; the home board attributes fall back to the older endpoint automatically.
+~> **The preference attributes require Homarr 2.3.0 or newer**, which added `PATCH /api/users/preferences`. They are read from `GET /api/users/{id}` and so are reported on older releases too, but setting them needs 2.3.0. The home boards and the search preferences — `default_search_engine_id`, `open_search_in_new_tab` and `ddg_bangs` — fall back to older endpoints automatically. `header` is only reported from 2.3.0 on.
 
-The three references — `home_board_id`, `mobile_home_board_id` and `default_search_engine_id` — are owned outright: leaving one out means the user has none, and a value set in the UI is cleared on the next apply. The other preferences are optional and computed, so leaving them out keeps whatever Homarr has.
+The three references — `home_board_id`, `mobile_home_board_id` and `default_search_engine_id` — are owned outright: leaving one out means the user has none, and a value set in the UI is cleared on the next apply; to keep one, set it in the configuration or list it in the `ignore_changes` lifecycle argument. The other preferences are optional and computed, so leaving them out keeps whatever Homarr has.
+
+~> **Destroying or replacing the user that owns the provider's API key is refused.** Homarr deletes a user's API keys along with the account, which would cut Terraform off from Homarr in the middle of the apply. To stop managing that account, remove it from state with a `removed` block or `terraform state rm`. The check needs Homarr 2.3.0 or newer to tell which user owns the key.
 
 ## Example Usage
 
@@ -34,18 +37,48 @@ resource "random_password" "viewer" {
 }
 
 resource "homarr_user" "viewer" {
+  # Renaming the user or changing its email is applied in place.
   username = "viewer"
   password = random_password.viewer.result
   email    = "viewer@example.com"
 
   home_board_id = homarr_board.shared.id
+
+  # A base64 data: URL of a PNG, JPEG, GIF or WebP picture of at most 350,000
+  # characters. Leave it out to keep a picture uploaded in the UI; "" removes it.
+  image = "data:image/png;base64,${filebase64("${path.module}/viewer.png")}"
+
+  # Once set, the header layout is managed as a whole: a zone left out is empty.
+  header = {
+    visible        = true
+    search_display = "icon"
+    logo_display   = "logoAndText"
+    left           = [{ builtin = "logo" }]
+    center         = [{ builtin = "search" }]
+    right = [
+      { board_id = homarr_board.shared.id },
+      { builtin = "themeToggle" },
+      { builtin = "user" },
+    ]
+  }
 }
 
-# Group membership is applied at creation only: Homarr exposes group management
-# solely over tRPC, so the provider can neither read it back nor change it later.
+# With Terraform 1.11 or newer, password_wo keeps the password out of the plan
+# and the state. It is sent at creation and whenever password_wo_version changes.
+variable "operator_password" {
+  type      = string
+  sensitive = true
+  ephemeral = true
+}
+
 resource "homarr_user" "operator" {
-  username  = "operator"
-  password  = random_password.viewer.result
+  username            = "operator"
+  password_wo         = var.operator_password
+  password_wo_version = 1
+
+  # Group membership is applied at creation only: Homarr exposes group
+  # management solely over tRPC, so the provider can neither read it back nor
+  # change it later.
   group_ids = ["hgw6bvj9r0ynmhqoi7ke91b8"]
 }
 ```
@@ -55,46 +88,157 @@ resource "homarr_user" "operator" {
 
 ### Required
 
-- `password` (String, Sensitive) Account password, at least 8 characters. Homarr's UI additionally asks for lowercase, uppercase, digit and special characters; the API enforces only the length.
+- `username` (String) Login name, between 3 and 255 characters (counted in UTF-16 code units, as Homarr counts them). It must be lowercase and must not start or end with whitespace: Homarr trims and lowercases every username before storing it, so any other spelling would be stored as something other than what is configured.
 
-Changing this value calls Homarr's change-password endpoint. Because the provider cannot read a password back, a password changed outside Terraform is not detected as drift.
-- `username` (String) Login name, between 3 and 255 characters (counted in UTF-16 code units, as Homarr counts them). It must be lowercase and must not start or end with whitespace: Homarr trims and lowercases every username before storing it, so any other spelling would be stored as something other than what is configured. Renaming is not supported by the API and forces a new user.
+Changing it renames the user in place through `PUT /api/users/profile`. Homarr refuses a name another credentials account already holds, and keeps the user's sessions signed in.
 
 Older Homarr releases stored usernames as typed. To import such a user, first lowercase the stored names with Homarr's `fix-usernames` CLI command.
 
 ### Optional
 
+> **NOTE**: [Write-only arguments](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments) are supported in Terraform 1.11 and later.
+
 - `byte_unit_system` (String) How byte sizes are displayed. One of `binary` (KiB, MiB) or `decimal` (kB, MB).
 - `color_scheme` (String) Interface colour scheme. One of `auto`, `light` or `dark`.
 - `ddg_bangs` (Boolean) Enable DuckDuckGo-style `!bang` shortcuts in the search bar.
 - `default_search_engine_id` (String) Identifier of the search engine used by the search bar. Search engines themselves have no REST surface, so the id has to come from Homarr. Leave it out, or set it to `null`, for none.
-- `email` (String) Optional email address. Must be a valid address; Homarr rejects an explicit null, so leave the attribute out entirely when the user has no email.
 
-~> **Note** Changing this forces a new user. Homarr's only email-editing endpoint acts on the account behind the API key, so there is no way to change a managed user's email in place.
+Like the home boards, it is owned outright: a search engine the user picks in the UI is cleared on the next apply unless it is configured here. Configurations written for provider 0.2.x lack the attribute, so the first apply after upgrading clears such a choice.
+- `email` (String) Optional email address. Homarr checks only its shape: 1 to 64 characters before a single `@` and 1 to 255 after it, none of them whitespace. Leave the attribute out when the user has no email.
+
+Setting or changing it updates the user in place through `PUT /api/users/profile`. Homarr can change an email but never clear one, so removing the attribute forces a new user.
+
+~> **Note** When Homarr runs with `AUTH_OIDC_ENABLE_DANGEROUS_CREDENTIALS_LINKING=true`, an OIDC sign-in whose verified email equals this one signs in *as this user*. The email therefore decides which OIDC identity can take the account over: only set an address its owner controls.
 - `enable_right_click_on_widgets` (Boolean) Let widgets handle right-clicks instead of the browser context menu.
 - `first_day_of_week` (Number) First day of the week in calendar widgets, `0` for Sunday through `6` for Saturday.
-- `group_ids` (List of String) Identifiers of groups the user joins at creation.
+- `group_ids` (List of String) Identifiers of groups the user joins at creation. Each must be unique and non-empty: Homarr adds the memberships only after creating the account, so a duplicate or unknown group fails the create with the user already in place. The provider records such a user as tainted, and the next apply replaces it.
 
-~> **Note** Group membership is create-only here. Homarr exposes group management solely over tRPC, so the provider can neither read memberships back nor change them later; changing this list forces a new user.
+~> **Note** Group membership is create-only here. Homarr exposes group management solely over tRPC, so the provider can neither read memberships back nor change them later; adding or removing a group forces a new user. Reordering the list does not.
+
+~> **Leave `group_ids` out of imported users.** After an import the provider knows of no memberships, so a configured `group_ids` plans a replacement, which deletes and recreates the account along with its API keys and sessions.
+- `header` (Attributes) Layout of the header bar shown above boards. Leave it out to keep whatever Homarr has; once set, the whole layout is managed, and a zone left out is emptied.
+
+Homarr requires every item to be unique across the three zones, at most 100 items per zone, and the `user` builtin — the account menu — somewhere in the header; the provider checks the same at plan time. A board shortcut must point to a board the user can view, or Homarr answers "One or more board shortcuts are unavailable to this user". Deleting a board does not remove its shortcut.
+
+~> **Requires Homarr 2.3.0 or newer.** On an older release the attribute is reported as `null` and cannot be set. Homarr 2.0 to 2.2 store the same layout, but report it only as the raw text they store, possibly in a legacy format, so the provider deliberately leaves it alone there. (see [below for nested schema](#nestedatt--header))
 - `home_board_id` (String) Board shown to this user on desktop. Leave it out, or set it to `null`, for no home board. Homarr only checks that the API key's user can view the board, and an admin key can view every board; the user themselves also needs view access, or their home page answers "Board not found".
+- `image` (String) Profile picture of the user, as a base64 `data:` URL of a PNG, JPEG, GIF or WebP image, at most 350,000 characters long — roughly 256 KiB of picture — for instance `"data:image/png;base64,${filebase64("avatar.png")}"`. Homarr accepts no other form, not even an `https` URL.
+
+Leave it out to keep whatever Homarr has, such as a picture the user uploaded in the UI; set it to `""` to remove the picture. It is set through `PUT /api/users/profileImage`, which every Homarr 2.x release has. The whole value is kept in Terraform state.
 - `mobile_home_board_id` (String) Board shown to this user on mobile. Leave it out, or set it to `null`, for no mobile home board. Homarr only checks that the API key's user can view the board, and an admin key can view every board; the user themselves also needs view access, or their home page answers "Board not found".
 - `open_search_in_new_tab` (Boolean) Open search results in a new browser tab.
+- `password` (String, Sensitive) Account password, at least 8 characters. Homarr's UI additionally asks for lowercase, uppercase, digit and special characters; the API enforces only the length. Exactly one of `password` and `password_wo` must be set.
+
+Changing this value calls Homarr's change-password endpoint. Because the provider cannot read a password back, a password changed outside Terraform is not detected as drift. The value is kept in Terraform state; with Terraform 1.11 or newer, `password_wo` avoids that.
+- `password_wo` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) Write-only alternative to `password`, never stored in the plan or state. Requires Terraform 1.11 or newer. The same length rules apply, and exactly one of `password` and `password_wo` must be set.
+
+Terraform cannot compare a write-only value with the one applied before, so the password is sent at creation and afterwards only when `password_wo_version` changes: change both together to rotate it.
+
+~> **Note** When the API key's own user changes its password, Homarr requires the current one, which the provider only knows from `password` in state. To rotate that account's password through `password_wo`, set the new value in the Homarr UI first; the apply then confirms it.
+- `password_wo_version` (Number) Version of `password_wo`, kept in state in place of the password itself. Changing it — usually by incrementing it — sends the current `password_wo` to Homarr. Only valid together with `password_wo`.
 - `ping_icons_enabled` (Boolean) Show online-status ping indicators as icons rather than dots.
 
 ### Read-Only
 
 - `id` (String) Homarr-generated identifier of the user. Homarr's create endpoint returns no body, so the provider recovers this by comparing the user list before and after the create; an LDAP or OIDC account with the same name is never mistaken for the new user.
-- `provider_name` (String) Auth provider backing the account, as reported by Homarr. Always `credentials` for users created by this provider.
+- `provider_name` (String) Auth provider backing the account, as reported by Homarr: `credentials`, since the resource refuses to import any other account. Only a user imported by an earlier version of the provider can report `ldap` or `oidc`.
+
+<a id="nestedatt--header"></a>
+### Nested Schema for `header`
+
+Required:
+
+- `logo_display` (String) How the `logo` item is shown: `logo` alone, or `logoAndText` with the page title beside it. Homarr's default is `logoAndText`.
+- `search_display` (String) How the `search` item is shown: `input` for a search field, `icon` for a button that opens one. Homarr's default is `input`.
+- `visible` (Boolean) Whether the header is shown. Homarr's default is `true`.
+
+Optional:
+
+- `center` (Attributes List) Items in the center zone, in display order, at most 100. Leave it out for an empty zone. (see [below for nested schema](#nestedatt--header--center))
+- `left` (Attributes List) Items in the left zone, in display order, at most 100. Leave it out for an empty zone. (see [below for nested schema](#nestedatt--header--left))
+- `right` (Attributes List) Items in the right zone, in display order, at most 100. Leave it out for an empty zone. (see [below for nested schema](#nestedatt--header--right))
+
+<a id="nestedatt--header--center"></a>
+### Nested Schema for `header.center`
+
+Optional:
+
+- `board_id` (String) Identifier of a board to link to.
+- `builtin` (String) A builtin control: `logo`, `search`, `home`, `boardSwitcher`, `assistant`, `docker`, `boardEdit`, `boardSettings`, `settings`, `themeToggle` or `user`. Exactly one of `builtin` and `board_id` must be set.
+
+
+<a id="nestedatt--header--left"></a>
+### Nested Schema for `header.left`
+
+Optional:
+
+- `board_id` (String) Identifier of a board to link to.
+- `builtin` (String) A builtin control: `logo`, `search`, `home`, `boardSwitcher`, `assistant`, `docker`, `boardEdit`, `boardSettings`, `settings`, `themeToggle` or `user`. Exactly one of `builtin` and `board_id` must be set.
+
+
+<a id="nestedatt--header--right"></a>
+### Nested Schema for `header.right`
+
+Optional:
+
+- `board_id` (String) Identifier of a board to link to.
+- `builtin` (String) A builtin control: `logo`, `search`, `home`, `boardSwitcher`, `assistant`, `docker`, `boardEdit`, `boardSettings`, `settings`, `themeToggle` or `user`. Exactly one of `builtin` and `board_id` must be set.
 
 ## Import
 
 Import is supported using the following syntax:
 
+In Terraform v1.12.0 and later, the [`import` block](https://developer.hashicorp.com/terraform/language/import) can be used with the `identity` attribute, for example:
+
+```terraform
+# The identity is the plain id; username=<name> works only as an import id.
+import {
+  to = homarr_user.viewer
+  identity = {
+    id = "hn8u8h18nvpxbvjryfdng4jt"
+  }
+}
+```
+
+<!-- schema generated by tfplugindocs -->
+### Identity Schema
+
+#### Required
+
+- `id` (String) Homarr-generated identifier of the user.
+
+In Terraform v1.5.0 and later, the [`import` block](https://developer.hashicorp.com/terraform/language/import) can be used with the `id` attribute, for example:
+
+```terraform
+import {
+  to = homarr_user.viewer
+  id = "hn8u8h18nvpxbvjryfdng4jt"
+}
+
+# Or by name. Only accounts that sign in with a Homarr password can be imported.
+import {
+  to = homarr_user.operator
+  id = "username=operator"
+}
+
+# Leave group_ids out of imported users: memberships cannot be read back, so a
+# configured group_ids would plan a replacement, deleting the account.
+```
+
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
 ```shell
-# Users are imported by id, discoverable with the homarr_users data source.
-# The password cannot be read from Homarr, so the first plan after import will
-# propose setting it to whatever your configuration specifies.
+# Users are imported by id, discoverable with the homarr_users data source, or
+# by name as "username=<name>". Only accounts that sign in with a Homarr
+# password can be imported; manage LDAP and OIDC users with
+# homarr_user_preferences. The password cannot be read from Homarr, so the first
+# plan after import will propose setting it to whatever your configuration
+# specifies — with password_wo, once password_wo_version is set.
+#
+# Group memberships cannot be read either, so after an import the provider
+# knows of none, and a configured group_ids plans a replacement, which deletes
+# and recreates the account. Leave group_ids out of imported users.
 terraform import homarr_user.viewer hn8u8h18nvpxbvjryfdng4jt
+
+terraform import homarr_user.viewer username=viewer
 ```

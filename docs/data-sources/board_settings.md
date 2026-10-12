@@ -4,11 +4,8 @@ page_title: "homarr_board_settings Data Source - Homarr"
 subcategory: ""
 description: |-
   Reads the appearance and behaviour settings of a Homarr board.
-
   ~> Requires Homarr 2.3.0 or newer, which added GET /api/boards/{id}/settings.
-
   ~> Needs modify access to the board, not the view access that listing boards requires — unusual for a data source, and a read-only API key will not work. Homarr answers 404 rather than 403 for a board it will not show you, so an insufficient key looks like a missing board.
-
   These fields are deliberately absent from homarr_board and its data sources, which are built on GET /api/boards and need only view; folding them in there would raise that permission floor for every existing configuration.
 ---
 

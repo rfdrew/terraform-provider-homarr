@@ -53,12 +53,14 @@ resource "homarr_user_preferences" "prefs" {
   color_scheme      = "light"
   first_day_of_week = 0
   ddg_bangs         = true
+  image             = "` + testImage + `"
 }
 `,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("homarr_user_preferences.prefs", "color_scheme", "light"),
 					resource.TestCheckResourceAttr("homarr_user_preferences.prefs", "first_day_of_week", "0"),
 					resource.TestCheckResourceAttr("homarr_user_preferences.prefs", "ddg_bangs", "true"),
+					resource.TestCheckResourceAttr("homarr_user_preferences.prefs", "image", testImage),
 				),
 			},
 			{

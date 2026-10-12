@@ -31,7 +31,7 @@
 set -euo pipefail
 
 CONTAINER="${HOMARR_TEST_CONTAINER:-homarr-tfprovider-test}"
-IMAGE="${HOMARR_TEST_IMAGE:-ghcr.io/homarr-labs/homarr:v2.3.0}"
+IMAGE="${HOMARR_TEST_IMAGE:-ghcr.io/homarr-labs/homarr:v2.4.1}"
 PORT="${HOMARR_TEST_PORT:-7575}"
 BASE="http://127.0.0.1:${PORT}"
 USERNAME="tfadmin"

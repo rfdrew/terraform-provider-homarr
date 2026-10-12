@@ -1,6 +1,10 @@
 package client
 
-import "context"
+import (
+	"context"
+	"regexp"
+	"strconv"
+)
 
 // ServerBoardSettings is the instance-wide board defaults object exposed by
 // GET and PATCH /api/settings/board. Both verbs always report every field; an
@@ -52,6 +56,34 @@ func (c *Client) UpdateServerBoardSettings(ctx context.Context, patch ServerBoar
 // Info is the response of GET /api/info.
 type Info struct {
 	Version string `json:"version"`
+}
+
+// releasePattern matches the major.minor.patch release a Homarr version starts
+// with; a pre-release or build suffix after it is ignored.
+var releasePattern = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)`)
+
+// AtLeast reports whether this Homarr is release major.minor.patch or newer.
+//
+// known is false when the version does not start with a major.minor.patch
+// release, as a custom build may report; atLeast is meaningless then. Homarr
+// answers 404 for a route a release lacks, so callers use this to tell an older
+// Homarr from a missing object rather than to refuse a call up front.
+func (i *Info) AtLeast(major, minor, patch int) (atLeast, known bool) {
+	m := releasePattern.FindStringSubmatch(i.Version)
+	if m == nil {
+		return false, false
+	}
+	want := [3]int{major, minor, patch}
+	for k := range want {
+		got, err := strconv.Atoi(m[k+1])
+		if err != nil {
+			return false, false
+		}
+		if got != want[k] {
+			return got > want[k], true
+		}
+	}
+	return true, true
 }
 
 // GetInfo reads the Homarr version. It is the cheapest authenticated call and

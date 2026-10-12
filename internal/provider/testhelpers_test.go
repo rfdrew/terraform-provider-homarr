@@ -35,3 +35,30 @@ func checkImportedBoard(expectedName string) func([]*terraform.InstanceState) er
 		return nil
 	}
 }
+
+// checkImportedBoardWithoutLayoutID asserts that a board imported by name
+// carries the expected name and column count, and no base layout id, which
+// only the create response contains.
+func checkImportedBoardWithoutLayoutID(expectedName string) func([]*terraform.InstanceState) error {
+	return func(states []*terraform.InstanceState) error {
+		if err := checkImportedBoard(expectedName)(states); err != nil {
+			return err
+		}
+		if got := states[0].Attributes["base_layout_id"]; got != "" {
+			return fmt.Errorf("imported board base_layout_id = %q, want it unset", got)
+		}
+		return nil
+	}
+}
+
+// captureAttr stores an attribute's value for comparison in a later step.
+func captureAttr(resourceName, attribute string, into *string) func(*terraform.State) error {
+	return func(state *terraform.State) error {
+		rs, ok := state.RootModule().Resources[resourceName]
+		if !ok {
+			return fmt.Errorf("resource %s not found in state", resourceName)
+		}
+		*into = rs.Primary.Attributes[attribute]
+		return nil
+	}
+}

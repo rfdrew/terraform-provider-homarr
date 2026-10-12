@@ -15,6 +15,9 @@ var (
 	_ datasource.DataSourceWithConfigure = &boardSettingsDataSource{}
 )
 
+// boardSettingsReadRelease added GET /api/boards/{id}/settings.
+var boardSettingsReadRelease = homarrRelease{2, 3, 0}
+
 // NewBoardSettingsDataSource returns the homarr_board_settings data source.
 func NewBoardSettingsDataSource() datasource.DataSource { return &boardSettingsDataSource{} }
 
@@ -136,12 +139,24 @@ func (d *boardSettingsDataSource) Read(ctx context.Context, req datasource.ReadR
 	settings, err := d.client.GetBoardSettings(ctx, config.ID.ValueString())
 	if err != nil {
 		if client.IsNotFound(err) {
-			resp.Diagnostics.AddError(
-				"Homarr board settings not found",
-				"No board with id "+config.ID.ValueString()+" is readable with this API key. Homarr "+
-					"answers 404 both for a board that does not exist and for one the key cannot modify, "+
-					"so check the id and the key's permissions.",
-			)
+			// The same 404 comes back for a missing board, for one the key
+			// cannot modify, and — before 2.3.0 — for the route itself.
+			older, known, version := homarrPredates(ctx, d.client, boardSettingsReadRelease)
+			if older {
+				resp.Diagnostics.AddError(
+					requiresHomarrSummary(boardSettingsReadRelease),
+					requiresHomarrDetail("The homarr_board_settings data source", "GET /api/boards/{id}/settings",
+						boardSettingsReadRelease, version),
+				)
+				return
+			}
+			detail := "No board with id " + config.ID.ValueString() + " is readable with this API key. Homarr " +
+				"answers 404 both for a board that does not exist and for one the key cannot modify, so check " +
+				"the id and the key's permissions."
+			if !known {
+				detail += " If this Homarr predates 2.3.0, the endpoint itself is missing as well."
+			}
+			resp.Diagnostics.AddError("Homarr board settings not found", detail)
 			return
 		}
 		resp.Diagnostics.AddError("Unable to read Homarr board settings", err.Error())

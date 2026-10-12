@@ -4,27 +4,23 @@ page_title: "homarr_user_preferences Resource - Homarr"
 subcategory: ""
 description: |-
   Manages the preferences of an existing Homarr user.
-
-  homarr_user already carries these attributes for accounts it created. This resource exists for the accounts it cannot create: users backed by LDAP or OIDC, the administrator made during onboarding, and anyone added through the Homarr UI. It attaches to a user by id and never creates or deletes the account itself.
-
+  homarr_user already carries these attributes for accounts it created. This resource exists for the accounts it cannot create: users backed by LDAP or OIDC, the administrator made during onboarding, and anyone added through the Homarr UI. It attaches to a user by id — or, with user_id left out, to the user behind the API key — and never creates or deletes the account itself.
   ~> Requires Homarr 2.3.0 or newer, which added GET and PATCH /api/users/preferences.
-
   ~> Do not manage the same user with both this resource and a homarr_user. Both write the same fields, so they would overwrite each other on every apply.
-
-  Every attribute is optional and computed: declare what you want to control and the rest is refreshed from Homarr and left alone. Because of that, null means "not managed" rather than "empty": to clear home_board_id, mobile_home_board_id or default_search_engine_id, set it to "". Targeting a user other than the one behind the API key requires admin. Destroying this resource leaves the preferences in place — they belong to the user and disappear only with the account.
+  Every attribute is optional and computed: declare what you want to control and the rest is refreshed from Homarr and left alone. Because of that, null means "not managed" rather than "empty": to clear home_board_id, mobile_home_board_id or default_search_engine_id, or to remove the image, set it to "". Targeting a user other than the one behind the API key requires admin. Destroying this resource leaves the preferences and the picture in place — they belong to the user and disappear only with the account.
 ---
 
 # homarr_user_preferences (Resource)
 
 Manages the preferences of an existing Homarr user.
 
-`homarr_user` already carries these attributes for accounts it created. This resource exists for the accounts it cannot create: users backed by LDAP or OIDC, the administrator made during onboarding, and anyone added through the Homarr UI. It attaches to a user by id and never creates or deletes the account itself.
+`homarr_user` already carries these attributes for accounts it created. This resource exists for the accounts it cannot create: users backed by LDAP or OIDC, the administrator made during onboarding, and anyone added through the Homarr UI. It attaches to a user by id — or, with `user_id` left out, to the user behind the API key — and never creates or deletes the account itself.
 
 ~> **Requires Homarr 2.3.0 or newer**, which added `GET` and `PATCH /api/users/preferences`.
 
 ~> **Do not manage the same user with both this resource and a `homarr_user`.** Both write the same fields, so they would overwrite each other on every apply.
 
-Every attribute is optional and computed: declare what you want to control and the rest is refreshed from Homarr and left alone. Because of that, `null` means "not managed" rather than "empty": to clear `home_board_id`, `mobile_home_board_id` or `default_search_engine_id`, set it to `""`. Targeting a user other than the one behind the API key requires admin. Destroying this resource leaves the preferences in place — they belong to the user and disappear only with the account.
+Every attribute is optional and computed: declare what you want to control and the rest is refreshed from Homarr and left alone. Because of that, `null` means "not managed" rather than "empty": to clear `home_board_id`, `mobile_home_board_id` or `default_search_engine_id`, or to remove the `image`, set it to `""`. Targeting a user other than the one behind the API key requires admin. Destroying this resource leaves the preferences and the picture in place — they belong to the user and disappear only with the account.
 
 ## Example Usage
 
@@ -32,19 +28,37 @@ Every attribute is optional and computed: declare what you want to control and t
 # Attach preferences to an account this provider did not create — an LDAP or
 # OIDC user, the administrator made during onboarding, or anyone added in the
 # Homarr UI.
-data "homarr_users" "all" {}
-
-locals {
-  ldap_user_id = one([for user in data.homarr_users.all.users : user.id if user.name == "jdoe"])
+# Usernames are unique only per auth provider, so name the provider too.
+data "homarr_user" "jdoe" {
+  username      = "jdoe"
+  provider_name = "ldap"
 }
 
 resource "homarr_user_preferences" "jdoe" {
-  user_id = local.ldap_user_id
+  user_id = data.homarr_user.jdoe.id
 
   color_scheme      = "dark"
   byte_unit_system  = "binary"
   first_day_of_week = 1
   home_board_id     = homarr_board.infra.id
+
+  # Homarr sets a profile picture for LDAP and OIDC accounts too. "" removes it.
+  image = "data:image/png;base64,${filebase64("${path.module}/jdoe.png")}"
+}
+
+# Without user_id, the preferences are those of the user behind the API key.
+# Any key may manage its own, so this works with a non-admin key too.
+resource "homarr_user_preferences" "me" {
+  color_scheme = "light"
+
+  header = {
+    visible        = true
+    search_display = "input"
+    logo_display   = "logo"
+    left           = [{ builtin = "logo" }, { builtin = "boardSwitcher" }]
+    center         = [{ builtin = "search" }]
+    right          = [{ builtin = "settings" }, { builtin = "user" }]
+  }
 }
 
 # Accounts this provider creates carry the same attributes on homarr_user
@@ -59,10 +73,6 @@ resource "homarr_user" "service" {
 <!-- schema generated by tfplugindocs -->
 ## Schema
 
-### Required
-
-- `user_id` (String) Identifier of the user whose preferences these are.
-
 ### Optional
 
 - `byte_unit_system` (String) How byte sizes are displayed. One of `binary` (KiB, MiB) or `decimal` (kB, MB).
@@ -71,18 +81,97 @@ resource "homarr_user" "service" {
 - `default_search_engine_id` (String) Identifier of the search engine used by the search bar. Search engines themselves have no REST surface, so the id has to come from Homarr. Set to `""` to clear it; leaving it out keeps whatever Homarr has.
 - `enable_right_click_on_widgets` (Boolean) Let widgets handle right-clicks instead of the browser context menu.
 - `first_day_of_week` (Number) First day of the week in calendar widgets, `0` for Sunday through `6` for Saturday.
+- `header` (Attributes) Layout of the header bar shown above boards. Leave it out to keep whatever Homarr has; once set, the whole layout is managed, and a zone left out is emptied.
+
+Homarr requires every item to be unique across the three zones, at most 100 items per zone, and the `user` builtin — the account menu — somewhere in the header; the provider checks the same at plan time. A board shortcut must point to a board the user can view, or Homarr answers "One or more board shortcuts are unavailable to this user". Deleting a board does not remove its shortcut.
+
+~> **Requires Homarr 2.3.0 or newer.** On an older release the attribute is reported as `null` and cannot be set. Homarr 2.0 to 2.2 store the same layout, but report it only as the raw text they store, possibly in a legacy format, so the provider deliberately leaves it alone there. (see [below for nested schema](#nestedatt--header))
 - `home_board_id` (String) Board shown to this user on desktop. Set to `""` to clear it; leaving it out keeps whatever Homarr has. Homarr only checks that the API key's user can view the board, and an admin key can view every board; the user themselves also needs view access, or their home page answers "Board not found".
+- `image` (String) Profile picture of the user, as a base64 `data:` URL of a PNG, JPEG, GIF or WebP image, at most 350,000 characters long — for instance `"data:image/png;base64,${filebase64("avatar.png")}"`. Set to `""` to remove the picture; leaving it out keeps whatever Homarr has. Unlike a rename, Homarr sets a picture for LDAP and OIDC accounts too, through `PUT /api/users/profileImage`, and reports it from `GET /api/users/{id}`. The whole value is kept in Terraform state.
+
+~> **Note** At every sign-in of an OIDC account, Homarr replaces a picture that is not a `data:` URL with the one the identity provider supplies. A picture set here therefore stays, while one removed with `""` comes back at the user's next sign-in and shows up as drift.
 - `mobile_home_board_id` (String) Board shown to this user on mobile. Set to `""` to clear it; leaving it out keeps whatever Homarr has. Homarr only checks that the API key's user can view the board, and an admin key can view every board; the user themselves also needs view access, or their home page answers "Board not found".
 - `open_search_in_new_tab` (Boolean) Open search results in a new browser tab.
 - `ping_icons_enabled` (Boolean) Show online-status ping indicators as icons rather than dots.
+- `user_id` (String) Identifier of the user whose preferences these are; the `homarr_user` data source finds it by username. Leave it out to target the user behind the API key, which any key may do — handy for a non-admin key managing its own preferences without looking up its id.
+
+The user is resolved at creation and the resource stays attached to it, even if the provider is later configured with another user's key. Setting `user_id` to a different user forces a new resource. Removing a configured `user_id` later does not retarget the resource either: it stays on that user. To manage the API key's own user instead, use `terraform apply -replace` or a new resource.
 
 ### Read-Only
 
 - `id` (String) Same value as `user_id`, present because Terraform requires an `id`.
 
+<a id="nestedatt--header"></a>
+### Nested Schema for `header`
+
+Required:
+
+- `logo_display` (String) How the `logo` item is shown: `logo` alone, or `logoAndText` with the page title beside it. Homarr's default is `logoAndText`.
+- `search_display` (String) How the `search` item is shown: `input` for a search field, `icon` for a button that opens one. Homarr's default is `input`.
+- `visible` (Boolean) Whether the header is shown. Homarr's default is `true`.
+
+Optional:
+
+- `center` (Attributes List) Items in the center zone, in display order, at most 100. Leave it out for an empty zone. (see [below for nested schema](#nestedatt--header--center))
+- `left` (Attributes List) Items in the left zone, in display order, at most 100. Leave it out for an empty zone. (see [below for nested schema](#nestedatt--header--left))
+- `right` (Attributes List) Items in the right zone, in display order, at most 100. Leave it out for an empty zone. (see [below for nested schema](#nestedatt--header--right))
+
+<a id="nestedatt--header--center"></a>
+### Nested Schema for `header.center`
+
+Optional:
+
+- `board_id` (String) Identifier of a board to link to.
+- `builtin` (String) A builtin control: `logo`, `search`, `home`, `boardSwitcher`, `assistant`, `docker`, `boardEdit`, `boardSettings`, `settings`, `themeToggle` or `user`. Exactly one of `builtin` and `board_id` must be set.
+
+
+<a id="nestedatt--header--left"></a>
+### Nested Schema for `header.left`
+
+Optional:
+
+- `board_id` (String) Identifier of a board to link to.
+- `builtin` (String) A builtin control: `logo`, `search`, `home`, `boardSwitcher`, `assistant`, `docker`, `boardEdit`, `boardSettings`, `settings`, `themeToggle` or `user`. Exactly one of `builtin` and `board_id` must be set.
+
+
+<a id="nestedatt--header--right"></a>
+### Nested Schema for `header.right`
+
+Optional:
+
+- `board_id` (String) Identifier of a board to link to.
+- `builtin` (String) A builtin control: `logo`, `search`, `home`, `boardSwitcher`, `assistant`, `docker`, `boardEdit`, `boardSettings`, `settings`, `themeToggle` or `user`. Exactly one of `builtin` and `board_id` must be set.
+
 ## Import
 
 Import is supported using the following syntax:
+
+In Terraform v1.12.0 and later, the [`import` block](https://developer.hashicorp.com/terraform/language/import) can be used with the `identity` attribute, for example:
+
+```terraform
+import {
+  to = homarr_user_preferences.jdoe
+  identity = {
+    user_id = "d3t6xvzgvb11fyl2385fb1sh"
+  }
+}
+```
+
+<!-- schema generated by tfplugindocs -->
+### Identity Schema
+
+#### Required
+
+- `user_id` (String) Identifier of the user whose preferences these are.
+
+In Terraform v1.5.0 and later, the [`import` block](https://developer.hashicorp.com/terraform/language/import) can be used with the `id` attribute, for example:
+
+```terraform
+import {
+  to = homarr_user_preferences.jdoe
+  id = "d3t6xvzgvb11fyl2385fb1sh"
+}
+```
 
 The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
 
