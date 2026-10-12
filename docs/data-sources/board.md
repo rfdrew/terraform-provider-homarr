@@ -16,6 +16,8 @@ Note that the board's column count is absent: Homarr's REST API does not expose 
 ## Example Usage
 
 ```terraform
+# The name is matched exactly first, then case-insensitively — the way Homarr
+# resolves board URLs — so "Infra" finds a board named "infra".
 data "homarr_board" "infra" {
   name = "infra"
 }
@@ -33,7 +35,7 @@ resource "homarr_board_settings" "infra" {
 ### Optional
 
 - `id` (String) Identifier of the board to look up.
-- `name` (String) Name of the board to look up. Board names are unique in Homarr.
+- `name` (String) Name of the board to look up. An exact match wins; otherwise the name is matched case-insensitively, the way Homarr resolves board URLs, and `name` then reports the board's actual spelling. Homarr's REST create accepts names that differ only in case, so when several boards match that way the lookup fails instead of guessing.
 
 ### Read-Only
 

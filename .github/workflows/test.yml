@@ -2,7 +2,11 @@
 #
 # The acceptance job boots a throwaway Homarr container, completes its onboarding
 # and mints an API key, so the provider is exercised against the real API rather
-# than a mock.
+# than a mock. It runs against the oldest fully supported Homarr release and the
+# one the provider is verified against, on the oldest supported Terraform, the
+# first with resource identity and the first with actions and list resources.
+# One more run against Homarr's unreleased `dev` image flags upcoming changes
+# early without failing the workflow.
 name: test
 
 on:
@@ -44,7 +48,7 @@ jobs:
       - run: go build ./...
 
       - name: Unit tests
-        run: go test ./internal/client/ -v
+        run: make test
 
   docs:
     name: docs are up to date
@@ -68,12 +72,21 @@ jobs:
           fi
 
   acceptance:
-    name: acceptance tests
+    name: acceptance tests (Homarr ${{ matrix.homarr }}, Terraform ${{ matrix.terraform }})
     runs-on: ubuntu-latest
+    # The dev canary may fail on changes Homarr has not released yet; it reports
+    # them without blocking the workflow.
+    continue-on-error: ${{ matrix.canary }}
     strategy:
       fail-fast: false
       matrix:
-        terraform: ["1.9.*", "1.14.*"]
+        homarr: ["v2.3.0", "v2.4.1"]
+        terraform: ["1.9.*", "1.12.*", "1.14.*"]
+        canary: [false]
+        include:
+          - homarr: "dev"
+            terraform: "1.14.*"
+            canary: true
     steps:
       - uses: actions/checkout@v4
 
@@ -88,6 +101,8 @@ jobs:
           terraform_wrapper: false
 
       - name: Boot Homarr and mint an API key
+        env:
+          HOMARR_TEST_IMAGE: ghcr.io/homarr-labs/homarr:${{ matrix.homarr }}
         run: |
           chmod +x scripts/bootstrap-test-homarr.sh
           scripts/bootstrap-test-homarr.sh > /tmp/homarr.env

@@ -31,12 +31,28 @@ type AppRequest struct {
 }
 
 // ListApps returns every app visible to the API key.
+//
+// Homarr 2.0.0 narrowed GET /api/apps to the app-modify-all permission, because
+// the full catalogue exposes internal URLs. A key without it now gets a 403
+// where it used to get a list, so this falls back to GET /api/apps/selectable,
+// which is open to any authenticated caller and returns the same six fields.
+// The fallback is best-effort: if it fails too, the original 403 is reported,
+// since that is the error worth acting on.
 func (c *Client) ListApps(ctx context.Context) ([]App, error) {
 	var apps []App
-	if err := c.do(ctx, "GET", "/api/apps", nil, &apps); err != nil {
+	err := c.do(ctx, "GET", "/api/apps", nil, &apps)
+	if err == nil {
+		return apps, nil
+	}
+	if !IsForbidden(err) {
 		return nil, err
 	}
-	return apps, nil
+
+	var selectable []App
+	if fallbackErr := c.do(ctx, "GET", "/api/apps/selectable", nil, &selectable); fallbackErr != nil {
+		return nil, err
+	}
+	return selectable, nil
 }
 
 // GetApp fetches a single app. A missing app yields a 404, detectable with

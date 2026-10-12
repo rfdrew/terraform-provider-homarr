@@ -23,6 +23,16 @@ func stringValueOrNull(s *string) types.String {
 	return types.StringValue(*s)
 }
 
+// emailValueOrNull maps a user's email to Terraform. Homarr stores an omitted
+// email as null but one supplied as "", as the UI does, verbatim; both mean the
+// user has none, so both read as null.
+func emailValueOrNull(s *string) types.String {
+	if s == nil || *s == "" {
+		return types.StringNull()
+	}
+	return types.StringValue(*s)
+}
+
 // boolPointerOrNil converts a Terraform bool into a pointer, so that unset
 // attributes can be omitted from a partial patch body.
 func boolPointerOrNil(v types.Bool) *bool {
@@ -33,12 +43,34 @@ func boolPointerOrNil(v types.Bool) *bool {
 	return &b
 }
 
-// float64PointerOrNil converts a Terraform number into a pointer, so that unset
+// int64PointerOrNil converts a Terraform integer into a pointer, so that unset
 // attributes can be omitted from a partial patch body.
-func float64PointerOrNil(v types.Float64) *float64 {
+func int64PointerOrNil(v types.Int64) *int64 {
 	if v.IsNull() || v.IsUnknown() {
 		return nil
 	}
-	f := v.ValueFloat64()
-	return &f
+	i := v.ValueInt64()
+	return &i
+}
+
+// stringValueOrNullKeepingEmpty is stringValueOrNull for fields where Homarr
+// stores "" but reports it back as null. When the model already holds a known
+// "" — the configuration asked for it, or state recorded it — a null from the
+// API is the same value, so "" is kept rather than flipping the attribute to
+// null and failing the apply with an inconsistent result.
+func stringValueOrNullKeepingEmpty(s *string, current types.String) types.String {
+	if s == nil && !current.IsNull() && !current.IsUnknown() && current.ValueString() == "" {
+		return current
+	}
+	return stringValueOrNull(s)
+}
+
+// stringValueOrNullIfEmpty maps an API string to Terraform, treating "" as
+// absent. Homarr omits some preference fields on releases that predate them,
+// which decodes to the zero value rather than a meaningful setting.
+func stringValueOrNullIfEmpty(s string) types.String {
+	if s == "" {
+		return types.StringNull()
+	}
+	return types.StringValue(s)
 }

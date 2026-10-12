@@ -2,9 +2,13 @@ package provider
 
 import (
 	"context"
+	"errors"
+	"sort"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/rfdrew/terraform-provider-homarr/internal/client"
@@ -82,9 +86,12 @@ func boardDataSourceAttributes(lookupKeys bool) map[string]schema.Attribute {
 			MarkdownDescription: "Identifier of the board to look up.",
 		}
 		attrs["name"] = schema.StringAttribute{
-			Optional:            true,
-			Computed:            true,
-			MarkdownDescription: "Name of the board to look up. Board names are unique in Homarr.",
+			Optional: true,
+			Computed: true,
+			MarkdownDescription: "Name of the board to look up. An exact match wins; otherwise the name is " +
+				"matched case-insensitively, the way Homarr resolves board URLs, and `name` then reports the " +
+				"board's actual spelling. Homarr's REST create accepts names that differ only in case, so " +
+				"when several boards match that way the lookup fails instead of guessing.",
 		}
 	}
 	return attrs
@@ -148,6 +155,11 @@ func (d *boardDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 		board, err = d.client.GetBoardByName(ctx, config.Name.ValueString())
 	}
 	if err != nil {
+		var ambiguous *client.AmbiguousBoardNameError
+		if errors.As(err, &ambiguous) {
+			resp.Diagnostics.AddAttributeError(path.Root("name"), "Ambiguous board name", err.Error())
+			return
+		}
 		resp.Diagnostics.AddError("Unable to read Homarr board", err.Error())
 		return
 	}
@@ -181,8 +193,10 @@ func (d *boardsDataSource) Schema(_ context.Context, _ datasource.SchemaRequest,
 		MarkdownDescription: "Lists every Homarr board visible to the configured API key.",
 		Attributes: map[string]schema.Attribute{
 			"boards": schema.ListNestedAttribute{
-				Computed:            true,
-				MarkdownDescription: "All boards, in the order Homarr returns them.",
+				Computed: true,
+				MarkdownDescription: "All boards, sorted by name case-insensitively, then by the exact " +
+					"name, so that names differing only in case keep a fixed order. Homarr itself returns " +
+					"them in no particular order.",
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: boardDataSourceAttributes(false),
 				},
@@ -202,6 +216,10 @@ func (d *boardsDataSource) Read(ctx context.Context, _ datasource.ReadRequest, r
 		return
 	}
 
+	// GET /api/boards has no ORDER BY, so its order depends on the database;
+	// sorting keeps index-based references and plans stable.
+	sortBoards(boards)
+
 	state := boardsDataSourceModel{Boards: make([]boardDataSourceModel, 0, len(boards))}
 	for i := range boards {
 		var item boardDataSourceModel
@@ -210,4 +228,19 @@ func (d *boardsDataSource) Read(ctx context.Context, _ datasource.ReadRequest, r
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+// sortBoards orders boards by name, ignoring case, then by exact name and id,
+// so that the order is total.
+func sortBoards(boards []client.BoardSummary) {
+	sort.Slice(boards, func(i, j int) bool {
+		a, b := boards[i], boards[j]
+		if la, lb := strings.ToLower(a.Name), strings.ToLower(b.Name); la != lb {
+			return la < lb
+		}
+		if a.Name != b.Name {
+			return a.Name < b.Name
+		}
+		return a.ID < b.ID
+	})
 }

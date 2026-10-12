@@ -9,6 +9,44 @@ description: |-
 Manages resources in a [Homarr](https://homarr.dev) dashboard instance through its
 OpenAPI-compatible REST API.
 
+## Compatibility
+
+**Provider 0.3.0** is built and verified against **Homarr 2.4.1**. Every feature
+works from Homarr **2.3.0**. Homarr 2.0–2.2 work too, except for the features
+below that need a newer Homarr; each one's page says so. The provider warns when
+Homarr reports a major version other than 2.
+
+| Provider | Verified against | Supported Homarr | Terraform |
+| --- | --- | --- | --- |
+| 0.3.0 | Homarr 2.4.1 | 2.3.0 and newer 2.x; 2.0–2.2 with the exceptions below | 1.9+ |
+| 0.2.0 | Homarr 1.76.2 | 1.x; not tested against 2.x | 1.9+ |
+| 0.1.0 | Homarr 1.73.0 | 1.x; not tested against 2.x | 1.9+ |
+
+| Feature | Needs |
+| --- | --- |
+| `homarr_integration_connection` | Homarr 2.1.0 |
+| `homarr_root_certificate` | Homarr 2.2.0 |
+| Drift detection in `homarr_board_settings`, and its data source | Homarr 2.3.0 |
+| `is_home` or `is_mobile_home` set to `false` | Homarr 2.3.0 |
+| Setting `homarr_user` preferences other than the home boards and search preferences; `homarr_user_preferences`; `homarr_current_user`; `header` | Homarr 2.3.0 |
+| `password_wo` on `homarr_user` | Terraform 1.11 |
+| Import by resource identity | Terraform 1.12 |
+| The `homarr_board_add_item` action; list resources for `terraform query` | Terraform 1.14 |
+
+## What it manages
+
+* **Apps** — `homarr_app`, and the `homarr_app` and `homarr_apps` data sources.
+* **Boards** — `homarr_board`, `homarr_board_copy` (a copy of a template board,
+  tiles included), `homarr_board_settings`, the `homarr_board`, `homarr_boards`
+  and `homarr_board_settings` data sources, and the `homarr_board_add_item`
+  action, which places a tile.
+* **Users** — `homarr_user` for credentials accounts, `homarr_user_preferences`
+  for any account, and the `homarr_user`, `homarr_current_user`, `homarr_users`
+  and `homarr_user_preferences` data sources.
+* **Invites** — `homarr_invite`, and the `homarr_invites` data source.
+* **Instance** — `homarr_server_board_settings` and its data source,
+  `homarr_root_certificate`, `homarr_integration_connection` and `homarr_info`.
+
 ## Scope and limitations
 
 Homarr exposes two APIs: a stable, OpenAPI-documented REST surface under `/api/…`
@@ -16,13 +54,20 @@ and an internal tRPC surface under `/api/trpc/…`. This provider only uses the
 former, because the tRPC layer is an implementation detail of the Homarr web UI
 and changes without notice.
 
-That boundary determines what can be managed. **Integrations, groups and board
-layouts are tRPC-only in Homarr and therefore not available here.**
+That boundary determines what can be managed. **Integrations cannot be listed
+or managed over REST, and groups, search engines and API keys have no REST
+surface at all, so none of them are available here.** Of the few integration
+and certificate endpoints REST does offer, the provider reads two: the
+connection test of a saved integration (`homarr_integration_connection`) and the
+metadata of a trusted root certificate (`homarr_root_certificate`).
 
-**Board items — the tiles on a board — are a special case.** Creating one is
-available over REST (`POST /api/boards/items`), but nothing lists, updates, moves,
-resizes or deletes an item. A resource built on that could only add tiles and
-never converge on a desired state, so it is deliberately absent; see
+**Board layouts and tiles can be written over REST but never read.** Tiles can
+be added, moved and resized, and a whole board rewritten in one call, but
+nothing lists a board's tiles or deletes one, and layouts can only be rewritten
+with the mobile layout's id, which no REST response contains. A resource built on
+that could never converge on a desired state, so tiles are placed by the
+`homarr_board_add_item` action instead, and `homarr_board_copy` reproduces a
+board designed in the UI; see
 [homarr-labs/homarr#6435](https://github.com/homarr-labs/homarr/issues/6435).
 
 Within the REST surface, a few endpoints are write-only or create-only; each
@@ -31,12 +76,18 @@ cases are:
 
 | Limitation | Effect |
 | --- | --- |
-| No `GET` for per-board settings | `homarr_board_settings` cannot detect drift; state reflects the last applied configuration |
+| Per-board settings readable only since Homarr 2.3.0 | On older Homarr, `homarr_board_settings` cannot detect drift; state reflects the last applied configuration |
 | Column count absent from board responses | `homarr_board.column_count` forces replacement when changed and needs a composite import id |
-| Board items are create-only | Tiles cannot be managed declaratively and are not exposed as a resource |
-| Group membership not readable | `homarr_user.group_ids` is create-only and forces replacement |
+| Board items cannot be read or deleted | Tiles are placed by the `homarr_board_add_item` action, not managed as a resource, and never removed by Terraform |
+| Group membership not readable | `homarr_user.group_ids` is create-only; adding or removing a group forces replacement |
+| A user's email cannot be cleared | Removing `homarr_user.email` forces replacement; setting or changing it happens in place |
+| LDAP and OIDC accounts refuse profile changes | `homarr_user` manages credentials accounts only; use `homarr_user_preferences` for the others |
 | Passwords not readable | A password changed outside Terraform is not detected as drift |
 | Invite tokens returned once | `homarr_invite.token` cannot be recovered after creation or by import |
+
+What Homarr would need to add to lift these limits is listed item by item in the
+repository's
+[`UPSTREAM.md`](https://github.com/rfdrew/terraform-provider-homarr/blob/main/UPSTREAM.md).
 
 ## Authentication
 

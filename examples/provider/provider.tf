@@ -2,7 +2,7 @@ terraform {
   required_providers {
     homarr = {
       source  = "rfdrew/homarr"
-      version = "~> 0.1"
+      version = "~> 0.3"
     }
   }
 }

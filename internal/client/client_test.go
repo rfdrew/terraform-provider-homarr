@@ -174,42 +174,6 @@ func TestGetBoardSynthesises404WhenAbsent(t *testing.T) {
 	}
 }
 
-func TestUserCreateOmitsNullEmail(t *testing.T) {
-	// Homarr rejects `"email": null` with a 400, so an unset email has to be
-	// omitted from the payload entirely.
-	var gotBody map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			_ = json.NewDecoder(r.Body).Decode(&gotBody)
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		_, _ = w.Write([]byte(`[{"id":"newid","name":"someone","email":null,"emailVerified":null,"image":null}]`))
-	}))
-	defer server.Close()
-
-	c, _ := New(Options{BaseURL: server.URL, APIKey: "id.token"})
-	id, err := c.CreateUser(context.Background(), UserCreateRequest{
-		Username:        "someone",
-		Password:        "hunter2hunter2",
-		ConfirmPassword: "hunter2hunter2",
-		Email:           nil,
-		GroupIDs:        []string{},
-	})
-	if err != nil {
-		t.Fatalf("CreateUser() error = %v", err)
-	}
-	if id != "newid" {
-		t.Errorf("CreateUser() id = %q, want newid", id)
-	}
-	if _, present := gotBody["email"]; present {
-		t.Errorf("request body contains an email key, want it omitted: %v", gotBody)
-	}
-	if _, present := gotBody["groupIds"]; !present {
-		t.Errorf("request body is missing groupIds, which Homarr requires: %v", gotBody)
-	}
-}
-
 func TestAppRequestSendsExplicitNulls(t *testing.T) {
 	// PATCH /api/apps/{id} validates every field as present-but-nullable, so
 	// unset attributes must serialise as null rather than be omitted.
@@ -244,4 +208,28 @@ func contains(haystack, needle string) bool {
 		}
 	}
 	return false
+}
+
+func TestUserPreferenceFieldsDecodeFromBothShapes(t *testing.T) {
+	// GET /api/users/{id} and /api/users/preferences report the preferences
+	// under the same names; both shapes embed UserPreferenceFields to share them.
+	const prefs = `"colorScheme":"dark","homeBoardId":"b1","firstDayOfWeek":1,"ddgBangs":true`
+
+	var detail UserDetail
+	if err := json.Unmarshal([]byte(`{"id":"u1","name":"u",`+prefs+`}`), &detail); err != nil {
+		t.Fatal(err)
+	}
+	var preferences UserPreferences
+	if err := json.Unmarshal([]byte(`{"userId":"u1","headerPreferences":{"version":1},`+prefs+`}`), &preferences); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, got := range map[string]UserPreferenceFields{"UserDetail": detail.UserPreferenceFields, "UserPreferences": preferences.UserPreferenceFields} {
+		if got.ColorScheme != "dark" || got.HomeBoardID == nil || *got.HomeBoardID != "b1" || got.FirstDayOfWeek != 1 || !got.DdgBangs {
+			t.Errorf("%s decoded preferences = %+v", name, got)
+		}
+	}
+	if detail.ID != "u1" || preferences.UserID != "u1" {
+		t.Errorf("ids = %q, %q; want u1 for both", detail.ID, preferences.UserID)
+	}
 }

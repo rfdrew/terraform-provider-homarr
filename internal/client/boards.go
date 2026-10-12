@@ -7,19 +7,21 @@ import (
 )
 
 // BoardCreator is the embedded creator object in a board summary.
+//
+// Homarr 2.4.1 also sends the creator's email, but unreleased Homarr drops it
+// from this public endpoint, so it is deliberately not decoded.
 type BoardCreator struct {
 	ID    string  `json:"id"`
 	Name  *string `json:"name"`
 	Image *string `json:"image"`
-	Email *string `json:"email"`
 }
 
-// BoardSummary mirrors boardSummarySchema, the only board shape the REST
-// surface exposes (GET /api/boards).
+// BoardSummary mirrors boardSummarySchema, the shape GET /api/boards returns.
 //
 // Note what is absent: the column count, and every field managed by
-// PATCH /api/boards/{id}/settings apart from logoImageUrl. Those cannot be read
-// back over REST at all.
+// PATCH /api/boards/{id}/settings apart from logoImageUrl. The settings are
+// readable separately since Homarr 2.3.0 — see GetBoardSettings — but the
+// column count still cannot be read back over REST at all.
 type BoardSummary struct {
 	ID           string        `json:"id"`
 	Name         string        `json:"name"`
@@ -37,27 +39,82 @@ type BoardCreateRequest struct {
 	IsPublic    bool   `json:"isPublic"`
 }
 
+// BoardCreated is the response of POST /api/boards.
+//
+// Homarr creates two layouts with every board: a 3-column Mobile layout and a
+// Base layout with the requested column count. LayoutID is the Base one, and
+// it is the only layout id any REST response contains; nothing reads layouts
+// back, and the Mobile layout's id is never returned at all.
+type BoardCreated struct {
+	BoardID  string `json:"boardId"`
+	Name     string `json:"name"`
+	LayoutID string `json:"layoutId"`
+}
+
 // BoardSettings is the body for PATCH /api/boards/{id}/settings.
 //
 // Every field is optional (the schema is .partial()), so all are pointers and
-// omitted when nil. There is deliberately no matching read method: Homarr has
-// no GET for per-board settings, only the tRPC-only full board query.
+// omitted when nil. The read counterpart is BoardSettingsRead, from
+// GetBoardSettings; releases before 2.3.0 have no GET for these at all.
 type BoardSettings struct {
-	PageTitle                 *string  `json:"pageTitle,omitempty"`
-	MetaTitle                 *string  `json:"metaTitle,omitempty"`
-	LogoImageURL              *string  `json:"logoImageUrl,omitempty"`
-	FaviconImageURL           *string  `json:"faviconImageUrl,omitempty"`
-	BackgroundImageURL        *string  `json:"backgroundImageUrl,omitempty"`
-	BackgroundImageAttachment *string  `json:"backgroundImageAttachment,omitempty"`
-	BackgroundImageRepeat     *string  `json:"backgroundImageRepeat,omitempty"`
-	BackgroundImageSize       *string  `json:"backgroundImageSize,omitempty"`
-	PrimaryColor              *string  `json:"primaryColor,omitempty"`
-	SecondaryColor            *string  `json:"secondaryColor,omitempty"`
-	Opacity                   *float64 `json:"opacity,omitempty"`
-	IconColor                 *string  `json:"iconColor,omitempty"`
-	ItemRadius                *string  `json:"itemRadius,omitempty"`
-	CustomCSS                 *string  `json:"customCss,omitempty"`
-	DisableStatus             *bool    `json:"disableStatus,omitempty"`
+	PageTitle                 *string `json:"pageTitle,omitempty"`
+	MetaTitle                 *string `json:"metaTitle,omitempty"`
+	LogoImageURL              *string `json:"logoImageUrl,omitempty"`
+	FaviconImageURL           *string `json:"faviconImageUrl,omitempty"`
+	BackgroundImageURL        *string `json:"backgroundImageUrl,omitempty"`
+	BackgroundImageAttachment *string `json:"backgroundImageAttachment,omitempty"`
+	BackgroundImageRepeat     *string `json:"backgroundImageRepeat,omitempty"`
+	BackgroundImageSize       *string `json:"backgroundImageSize,omitempty"`
+	PrimaryColor              *string `json:"primaryColor,omitempty"`
+	SecondaryColor            *string `json:"secondaryColor,omitempty"`
+	Opacity                   *int64  `json:"opacity,omitempty"`
+	IconColor                 *string `json:"iconColor,omitempty"`
+	ItemRadius                *string `json:"itemRadius,omitempty"`
+	CustomCSS                 *string `json:"customCss,omitempty"`
+	DisableStatus             *bool   `json:"disableStatus,omitempty"`
+}
+
+// BoardSettingsRead is the shape returned by GET /api/boards/{id}/settings,
+// added in Homarr 2.3.0.
+//
+// It is the write schema made total: every field PATCH accepts is present, plus
+// the board's id and name. Six of the text fields round-trip as null — the
+// handler coalesces them to "" but the output schema transforms empty strings
+// back to null — while customCss is not nullable, so a board with no custom CSS
+// reports "" rather than null.
+type BoardSettingsRead struct {
+	ID                        string  `json:"id"`
+	Name                      string  `json:"name"`
+	PageTitle                 *string `json:"pageTitle"`
+	MetaTitle                 *string `json:"metaTitle"`
+	LogoImageURL              *string `json:"logoImageUrl"`
+	FaviconImageURL           *string `json:"faviconImageUrl"`
+	BackgroundImageURL        *string `json:"backgroundImageUrl"`
+	BackgroundImageAttachment string  `json:"backgroundImageAttachment"`
+	BackgroundImageRepeat     string  `json:"backgroundImageRepeat"`
+	BackgroundImageSize       string  `json:"backgroundImageSize"`
+	PrimaryColor              string  `json:"primaryColor"`
+	SecondaryColor            string  `json:"secondaryColor"`
+	Opacity                   float64 `json:"opacity"`
+	IconColor                 *string `json:"iconColor"`
+	ItemRadius                string  `json:"itemRadius"`
+	CustomCSS                 string  `json:"customCss"`
+	DisableStatus             bool    `json:"disableStatus"`
+}
+
+// GetBoardSettings reads a board's settings.
+//
+// Requires modify access to the board, not merely view. Homarr deliberately
+// answers 404 for a board that exists but is not visible to the caller, so a
+// NotFound here can mean either absent or forbidden.
+//
+// Requires Homarr 2.3.0 or newer; older releases have no GET for these.
+func (c *Client) GetBoardSettings(ctx context.Context, id string) (*BoardSettingsRead, error) {
+	var settings BoardSettingsRead
+	if err := c.do(ctx, "GET", "/api/boards/"+url.PathEscape(id)+"/settings", nil, &settings); err != nil {
+		return nil, err
+	}
+	return &settings, nil
 }
 
 // ListBoards returns every board visible to the API key.
@@ -90,41 +147,37 @@ func (c *Client) GetBoard(ctx context.Context, id string) (*BoardSummary, error)
 	}
 }
 
-// GetBoardByName finds a board by its unique name, with the same 404 semantics
-// as GetBoard.
+// GetBoardByName finds a board by name, with the same 404 semantics as
+// GetBoard. See FindBoardByName for how the name is matched.
 func (c *Client) GetBoardByName(ctx context.Context, name string) (*BoardSummary, error) {
 	boards, err := c.ListBoards(ctx)
 	if err != nil {
 		return nil, err
 	}
-	for i := range boards {
-		if boards[i].Name == name {
-			return &boards[i], nil
-		}
-	}
-	return nil, &Error{
-		StatusCode: 404,
-		Code:       "NOT_FOUND",
-		Message:    fmt.Sprintf("board named %q is not present in GET /api/boards", name),
-	}
+	return FindBoardByName(boards, name)
 }
 
-// CreateBoard creates a board and returns its id.
-func (c *Client) CreateBoard(ctx context.Context, req BoardCreateRequest) (string, error) {
-	var out struct {
-		BoardID string `json:"boardId"`
-	}
+// CreateBoard creates a board and returns its id and base layout id.
+//
+// Homarr does not check the name itself here, unlike rename and duplicate: an
+// exact duplicate trips the database's unique constraint and comes back as
+// HTTP 500 (see IsBoardNameConstraintViolation), and a name differing only in
+// case is accepted.
+func (c *Client) CreateBoard(ctx context.Context, req BoardCreateRequest) (*BoardCreated, error) {
+	var out BoardCreated
 	if err := c.do(ctx, "POST", "/api/boards", req, &out); err != nil {
-		return "", err
+		return nil, err
 	}
 	if out.BoardID == "" {
-		return "", fmt.Errorf("Homarr accepted the board but returned no boardId")
+		return nil, fmt.Errorf("Homarr accepted the board but returned no boardId")
 	}
-	return out.BoardID, nil
+	return &out, nil
 }
 
 // RenameBoard changes a board's name. Names must match ^[A-Za-z0-9-_]*$ and be
-// unique; violations come back as 400 and 409 respectively.
+// unique, compared case-insensitively; violations come back as 400 and 409
+// respectively. Requires full access to the board, and Homarr answers 404
+// rather than 403 to a caller without it.
 func (c *Client) RenameBoard(ctx context.Context, id, name string) error {
 	body := struct {
 		Name string `json:"name"`
@@ -133,7 +186,8 @@ func (c *Client) RenameBoard(ctx context.Context, id, name string) error {
 }
 
 // SetBoardVisibility flips a board between public and private. Homarr refuses
-// to make a home board private.
+// with 400 to make the instance-wide home board private, and like RenameBoard
+// it needs full access and answers 404 without it.
 func (c *Client) SetBoardVisibility(ctx context.Context, id string, isPublic bool) error {
 	visibility := "private"
 	if isPublic {
@@ -148,11 +202,12 @@ func (c *Client) SetBoardVisibility(ctx context.Context, id string, isPublic boo
 // SetBoardAsHome makes the board the desktop home board of the user behind the
 // API key.
 //
-// This is a set-only operation: Homarr writes users.homeBoardId and offers no
-// REST call to clear it. The home board is a per-user singleton, so this
-// implicitly stops whichever board held the flag before from being the home
-// board. Clearing it requires PATCH /api/users/changeHome with an explicit
-// user id — see SetUserHomeBoards.
+// This is a set-only operation: Homarr writes users.homeBoardId. The home
+// board is a per-user singleton, so this implicitly stops whichever board held
+// the flag before from being the home board. Clearing goes through the user
+// instead: PATCH /api/users/preferences with an explicit null (see
+// UpdateUserPreferences, Homarr 2.3.0 or newer), or PATCH /api/users/changeHome,
+// which replaces both slots at once (see SetUserHomeBoards).
 func (c *Client) SetBoardAsHome(ctx context.Context, id string) error {
 	return c.do(ctx, "PATCH", "/api/boards/"+url.PathEscape(id)+"/home", struct{}{}, nil)
 }
@@ -167,7 +222,9 @@ func (c *Client) UpdateBoardSettings(ctx context.Context, id string, settings Bo
 	return c.do(ctx, "PATCH", "/api/boards/"+url.PathEscape(id)+"/settings", settings, nil)
 }
 
-// DeleteBoard removes a board and everything on it.
+// DeleteBoard removes a board and everything on it. Like RenameBoard it needs
+// full access and answers 404 without it. Homarr does not clear the board from
+// the instance-wide board settings, which keep referencing a deleted home board.
 func (c *Client) DeleteBoard(ctx context.Context, id string) error {
 	return c.do(ctx, "DELETE", "/api/boards/"+url.PathEscape(id), nil, nil)
 }

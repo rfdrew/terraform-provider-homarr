@@ -4,6 +4,18 @@
 BINARY  := terraform-provider-homarr
 VERSION ?= dev
 
+# tfplugindocs is pinned: releases differ in how they render the front matter,
+# and CI fails whenever `make docs` changes anything under docs/, so @latest
+# would break the docs check whenever a new release came out.
+TFPLUGINDOCS_VERSION ?= v0.25.0
+
+# tfplugindocs renders from the schema of whichever Terraform it runs. Releases
+# before 1.14 report no actions or list resources, and tfplugindocs then
+# deletes docs/actions/ and docs/list-resources/ without complaint, so it is
+# told to download this release instead of using the one on PATH. It must be an
+# exact version: tfplugindocs refuses wildcards such as 1.14.x.
+TERRAFORM_DOCS_VERSION ?= 1.14.0
+
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -23,8 +35,10 @@ vet: ## Run go vet
 
 lint: fmt vet ## Format and vet
 
+# The acceptance tests in internal/provider skip themselves without TF_ACC, so
+# this runs only the provider's unit tests alongside the client's.
 test: ## Run unit tests (no Homarr instance needed)
-	go test ./internal/client/ -v
+	go test ./internal/client/ ./internal/provider/ -v
 
 # Acceptance tests create and destroy real objects. Point them at a throwaway
 # instance -- `make homarr-up` prints the exports you need.
@@ -38,9 +52,10 @@ homarr-down: ## Remove the throwaway Homarr container
 	@./scripts/bootstrap-test-homarr.sh --teardown
 
 docs: ## Regenerate docs/ from the schemas and examples
-	go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@latest generate \
+	go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@$(TFPLUGINDOCS_VERSION) generate \
 		--provider-name homarr \
-		--rendered-provider-name Homarr
+		--rendered-provider-name Homarr \
+		--tf-version $(TERRAFORM_DOCS_VERSION)
 
 clean: ## Remove build artefacts
 	rm -f $(BINARY)

@@ -5,7 +5,9 @@ subcategory: ""
 description: |-
   Manages the instance-wide board defaults under Management > Settings > Board.
   This is a singleton: Homarr has exactly one such settings object, so declare at most one of these resources. Unlike homarr_board_settings, these values are readable, so drift is detected normally.
-  Creating this resource adopts the existing settings rather than resetting them — only the attributes you specify are sent. Destroying it leaves the settings in place and simply removes them from state.
+  Creating this resource adopts the existing settings rather than resetting them — only the attributes you specify are sent. Because of that, null means "not managed" rather than "none": to clear home_board_id or mobile_home_board_id, set it to "". Destroying this resource leaves the settings in place and simply removes them from state.
+  ~> Both home boards must be public boards, and Homarr may check the one you do not manage. Onboarding stores Homarr's onboarding board, which is private, in both slots, and deleting a board leaves its id behind here. Homarr 2.4.1 and earlier check only the home boards a change sends, but the release after 2.4.1 checks the stored result, so a private or deleted board left in either slot makes every change fail — even one that sets only force_disable_status, and even saving the board settings in Homarr's UI. Manage both home board attributes together, set to public boards or to "", or make the onboarding board public. When Homarr refuses a board, the error names the attribute that holds it.
+  ~> Clear the home boards before destroying a board they point at. Neither destroying this resource nor deleting a board clears them, so destroying a configuration that holds both a homarr_board and these settings pointing at it — as in the example below — leaves the deleted board's id behind. Visitors who fall back to the instance home board then land on a board that no longer exists, and the release after Homarr 2.4.1 refuses every later change to these settings until the id is replaced, even adopting them again with an empty resource. Before such a destroy, set home_board_id and mobile_home_board_id to "", or to a board that stays, and apply.
 ---
 
 # homarr_server_board_settings (Resource)
@@ -14,7 +16,11 @@ Manages the instance-wide board defaults under *Management > Settings > Board*.
 
 This is a singleton: Homarr has exactly one such settings object, so declare at most one of these resources. Unlike `homarr_board_settings`, these values *are* readable, so drift is detected normally.
 
-Creating this resource adopts the existing settings rather than resetting them — only the attributes you specify are sent. Destroying it leaves the settings in place and simply removes them from state.
+Creating this resource adopts the existing settings rather than resetting them — only the attributes you specify are sent. Because of that, `null` means "not managed" rather than "none": to clear `home_board_id` or `mobile_home_board_id`, set it to `""`. Destroying this resource leaves the settings in place and simply removes them from state.
+
+~> **Both home boards must be public boards, and Homarr may check the one you do not manage.** Onboarding stores Homarr's onboarding board, which is private, in both slots, and deleting a board leaves its id behind here. Homarr 2.4.1 and earlier check only the home boards a change sends, but the release after 2.4.1 checks the stored result, so a private or deleted board left in either slot makes every change fail — even one that sets only `force_disable_status`, and even saving the board settings in Homarr's UI. Manage both home board attributes together, set to public boards or to `""`, or make the onboarding board public. When Homarr refuses a board, the error names the attribute that holds it.
+
+~> **Clear the home boards before destroying a board they point at.** Neither destroying this resource nor deleting a board clears them, so destroying a configuration that holds both a `homarr_board` and these settings pointing at it — as in the example below — leaves the deleted board's id behind. Visitors who fall back to the instance home board then land on a board that no longer exists, and the release after Homarr 2.4.1 refuses every later change to these settings until the id is replaced, even adopting them again with an empty resource. Before such a destroy, set `home_board_id` and `mobile_home_board_id` to `""`, or to a board that stays, and apply.
 
 ## Example Usage
 
@@ -26,9 +32,19 @@ resource "homarr_board" "landing" {
 }
 
 # Instance-wide board defaults. This is a singleton, so declare at most one.
+# Leaving a home board out keeps whatever Homarr has; set it to "" to clear it.
+#
+# Both home boards must be public boards. After onboarding, both point at
+# Homarr's private onboarding board, and Homarr releases after 2.4.1 check the
+# stored home boards on every change, so manage both of them together.
+#
+# Destroying this resource does not clear the home boards, and deleting a board
+# does not either. Before destroying homarr_board.landing, or this whole
+# configuration, set home_board_id to "" and apply, or the instance is left
+# with the id of a board that no longer exists.
 resource "homarr_server_board_settings" "this" {
   home_board_id        = homarr_board.landing.id
-  mobile_home_board_id = homarr_board.landing.id
+  mobile_home_board_id = ""
 
   enable_status_by_default = true
   force_disable_status     = false
@@ -42,8 +58,12 @@ resource "homarr_server_board_settings" "this" {
 
 - `enable_status_by_default` (Boolean) Whether newly added board items show their online status by default.
 - `force_disable_status` (Boolean) Disable online-status pings across every board, overriding per-board settings.
-- `home_board_id` (String) Board shown to users on desktop when they have no personal home board. Homarr requires it to reference a public board.
-- `mobile_home_board_id` (String) Board shown to users on mobile when they have no personal home board.
+- `home_board_id` (String) Board shown on desktop to anonymous visitors and to users with no personal or group home board. Homarr requires it to reference a public board, and refuses to make that board private while it is selected here. Set to `""` to clear it; leaving it out keeps whatever Homarr has. Once it is cleared, those visitors get "No home board found" instead — on mobile too, unless `mobile_home_board_id` is set. Home boards chosen by users and groups, including *everyone*, are separate settings and are not affected.
+
+After onboarding this holds Homarr's onboarding board, which is private, so writing that id back — after importing these settings, say — fails until the board is made public. Deleting the board selected here does not clear it: the id is left dangling, and the release after Homarr 2.4.1 refuses every change to these settings until it is replaced or cleared, whether or not this attribute is managed.
+- `mobile_home_board_id` (String) Board shown on mobile to anonymous visitors and to users with no personal or group home board. Homarr requires it to reference a public board, and refuses to make that board private while it is selected here. Set to `""` to clear it; leaving it out keeps whatever Homarr has. Once it is cleared, mobile falls back to `home_board_id`.
+
+Like `home_board_id`, this holds Homarr's private onboarding board after onboarding, and keeps the id of a board deleted since; the release after Homarr 2.4.1 refuses every change to these settings while it does, whether or not this attribute is managed.
 
 ### Read-Only
 

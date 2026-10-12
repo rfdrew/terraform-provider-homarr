@@ -1,3 +1,5 @@
+# The name is matched exactly first, then case-insensitively — the way Homarr
+# resolves board URLs — so "Infra" finds a board named "infra".
 data "homarr_board" "infra" {
   name = "infra"
 }
