@@ -2,8 +2,9 @@
 #
 # The acceptance job boots a throwaway Homarr container, completes its onboarding
 # and mints an API key, so the provider is exercised against the real API rather
-# than a mock. It runs against the oldest fully supported Homarr release and the
-# one the provider is verified against, on the oldest supported Terraform, the
+# than a mock. It runs against the oldest fully supported Homarr release, the
+# last one before 2.5.0 began checking the stored home boards, and the one the
+# provider is verified against, on the oldest supported Terraform, the
 # first with resource identity and the first with actions and list resources.
 # One more run against Homarr's unreleased `dev` image flags upcoming changes
 # early without failing the workflow.
@@ -80,7 +81,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        homarr: ["v2.3.0", "v2.4.1"]
+        homarr: ["v2.3.0", "v2.4.1", "v2.5.2"]
         terraform: ["1.9.*", "1.12.*", "1.14.*"]
         canary: [false]
         include:

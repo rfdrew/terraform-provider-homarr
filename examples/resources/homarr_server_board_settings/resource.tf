@@ -8,7 +8,7 @@ resource "homarr_board" "landing" {
 # Leaving a home board out keeps whatever Homarr has; set it to "" to clear it.
 #
 # Both home boards must be public boards. After onboarding, both point at
-# Homarr's private onboarding board, and Homarr releases after 2.4.1 check the
+# Homarr's private onboarding board, and Homarr 2.5.0 and later check the
 # stored home boards on every change, so manage both of them together.
 #
 # Destroying this resource does not clear the home boards, and deleting a board

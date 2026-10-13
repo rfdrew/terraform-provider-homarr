@@ -12,7 +12,7 @@ import (
 )
 
 // Homarr requires both instance home boards to be public boards. 2.4.1 checks
-// only the ids a PATCH sends; the release after it checks the stored result
+// only the ids a PATCH sends; 2.5.0 and later check the stored result
 // too, so a board the configuration never mentions — the private onboarding
 // board, or one deleted since — can fail a change to something else entirely.
 
@@ -105,7 +105,7 @@ func TestServerBoardSettingsReportsABoardSentForBothSlotsOnBoth(t *testing.T) {
 	}
 }
 
-// The release after 2.4.1: the configuration manages only a flag, and the
+// Homarr 2.5.0: the configuration manages only a flag, and the
 // stored onboarding board — private — is refused in both slots.
 func TestServerBoardSettingsExplainsAStoredBoardItDidNotSend(t *testing.T) {
 	fake := newFakeHomarr()
@@ -132,7 +132,7 @@ func TestServerBoardSettingsExplainsAStoredBoardItDidNotSend(t *testing.T) {
 	}
 }
 
-// The release after 2.4.1, mixing both: the configuration fixes one slot, but
+// Homarr 2.5.0, mixing both: the configuration fixes one slot, but
 // the other still holds a deleted board.
 func TestServerBoardSettingsSeparatesSentFromStoredBoards(t *testing.T) {
 	fake := newFakeHomarr()
@@ -151,7 +151,7 @@ func TestServerBoardSettingsSeparatesSentFromStoredBoards(t *testing.T) {
 	}
 }
 
-// The release after 2.4.1: the configuration sends the onboarding board for
+// Homarr 2.5.0: the configuration sends the onboarding board for
 // one slot, and the other, unmanaged, still holds it. Homarr names it twice,
 // and both attributes are reported in one go rather than one per apply.
 func TestServerBoardSettingsAlsoReportsTheSameBoardStoredInTheOtherSlot(t *testing.T) {

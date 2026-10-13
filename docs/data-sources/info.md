@@ -16,16 +16,16 @@ Reports the version of the Homarr instance, useful for guarding configuration ag
 data "homarr_info" "this" {}
 
 output "homarr_version" {
-  value = data.homarr_info.this.version # e.g. "2.4.1"
+  value = data.homarr_info.this.version # e.g. "2.5.2"
 }
 
 locals {
-  # "2.4.1" becomes [2, 4]; a version that does not parse becomes [0, 0].
+  # "2.5.2" becomes [2, 5]; a version that does not parse becomes [0, 0].
   homarr_version = try([for part in slice(split(".", data.homarr_info.this.version), 0, 2) : tonumber(part)], [0, 0])
 }
 
 # Guard a configuration against instances that are too old. This provider
-# targets Homarr 2.4.1, and features such as the preference attributes need
+# targets Homarr 2.5.2, and features such as the preference attributes need
 # 2.3.0 or newer.
 check "homarr_version_supported" {
   assert {
@@ -41,4 +41,4 @@ check "homarr_version_supported" {
 ### Read-Only
 
 - `id` (String) Always `info`; present because Terraform requires an `id`.
-- `version` (String) Homarr version, e.g. `2.4.1`.
+- `version` (String) Homarr version, e.g. `2.5.2`.

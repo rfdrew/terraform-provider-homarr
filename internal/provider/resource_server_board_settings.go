@@ -60,7 +60,7 @@ func (r *serverBoardSettingsResource) Schema(_ context.Context, _ resource.Schem
 			"~> **Both home boards must be public boards, and Homarr may check the one you do not manage.** " +
 			"Onboarding stores Homarr's onboarding board, which is private, in both slots, and deleting a board " +
 			"leaves its id behind here. Homarr 2.4.1 and earlier check only the home boards a change sends, but " +
-			"the release after 2.4.1 checks the stored result, so a private or deleted board left in either " +
+			"Homarr 2.5.0 and later check the stored result, so a private or deleted board left in either " +
 			"slot makes every change fail — even one that sets only `force_disable_status`, and even saving the " +
 			"board settings in Homarr's UI. Manage both home board attributes together, set to public boards or " +
 			"to `\"\"`, or make the onboarding board public. When Homarr refuses a board, the error names the " +
@@ -69,7 +69,7 @@ func (r *serverBoardSettingsResource) Schema(_ context.Context, _ resource.Schem
 			"resource nor deleting a board clears them, so destroying a configuration that holds both a " +
 			"`homarr_board` and these settings pointing at it — as in the example below — leaves the deleted " +
 			"board's id behind. Visitors who fall back to the instance home board then land on a board that no " +
-			"longer exists, and the release after Homarr 2.4.1 refuses every later change to these settings " +
+			"longer exists, and Homarr 2.5.0 and later refuse every later change to these settings " +
 			"until the id is replaced, even adopting them again with an empty resource. Before such a destroy, " +
 			"set `home_board_id` and `mobile_home_board_id` to `\"\"`, or to a board that stays, and apply.",
 		Attributes: map[string]schema.Attribute{
@@ -91,8 +91,8 @@ func (r *serverBoardSettingsResource) Schema(_ context.Context, _ resource.Schem
 					"including *everyone*, are separate settings and are not affected.\n\n" +
 					"After onboarding this holds Homarr's onboarding board, which is private, so writing that id " +
 					"back — after importing these settings, say — fails until the board is made public. Deleting " +
-					"the board selected here does not clear it: the id is left dangling, and the release after " +
-					"Homarr 2.4.1 refuses every change to these settings until it is replaced or cleared, whether " +
+					"the board selected here does not clear it: the id is left dangling, and Homarr 2.5.0 and " +
+					"later refuse every change to these settings until it is replaced or cleared, whether " +
 					"or not this attribute is managed.",
 			},
 			"mobile_home_board_id": schema.StringAttribute{
@@ -103,7 +103,7 @@ func (r *serverBoardSettingsResource) Schema(_ context.Context, _ resource.Schem
 					"that board private while it is selected here. Set to `\"\"` to clear it; leaving it out keeps " +
 					"whatever Homarr has. Once it is cleared, mobile falls back to `home_board_id`.\n\n" +
 					"Like `home_board_id`, this holds Homarr's private onboarding board after onboarding, and keeps " +
-					"the id of a board deleted since; the release after Homarr 2.4.1 refuses every change to " +
+					"the id of a board deleted since; Homarr 2.5.0 and later refuse every change to " +
 					"these settings while it does, whether or not this attribute is managed.",
 			},
 			"enable_status_by_default": schema.BoolAttribute{
@@ -208,8 +208,8 @@ func refusedHomeBoardIDs(err error) ([]string, bool) {
 // attribute that holds it.
 //
 // Homarr 2.4.1 and earlier check only the home board ids a patch sends, so a
-// refused id is one this configuration asked for. The release after 2.4.1
-// checks the merged result instead, so an id can also come from a slot the
+// refused id is one this configuration asked for. Homarr 2.5.0 and later
+// check the merged result instead, so an id can also come from a slot the
 // patch left alone: Homarr's private onboarding board, or a board deleted
 // since. Those are found by reading the stored settings, and explained
 // differently, because the attribute holding them may not even be managed.
@@ -217,7 +217,7 @@ func refusedHomeBoardIDs(err error) ([]string, bool) {
 // Homarr names a board once for every slot holding it, so each slot the patch
 // sent with a refused board accounts for one mention. Only mentions left over
 // point at stored slots: Homarr 2.4.1 never leaves any, so it never costs the
-// extra read, and the release after it does when the same board is both sent
+// extra read, and 2.5.0 and later do when the same board is both sent
 // for one slot and stored in the other — the onboarding board, typically.
 func (r *serverBoardSettingsResource) addApplyError(ctx context.Context, plan *serverBoardSettingsModel, err error, diags *diag.Diagnostics) {
 	ids, ok := refusedHomeBoardIDs(err)
@@ -378,8 +378,8 @@ func (r *serverBoardSettingsResource) Delete(ctx context.Context, req resource.D
 		if len(kept) > 0 {
 			detail += " The home boards stay selected too (board " + strings.Join(kept, ", board ") + "). If " +
 				"one of them is being destroyed as well, its id is left behind: visitors who fall back to the " +
-				"instance home board land on a board that no longer exists, and the release after Homarr 2.4.1 " +
-				"refuses every change to these settings, including from its UI, until that home board is set " +
+				"instance home board land on a board that no longer exists, and Homarr 2.5.0 and later " +
+				"refuse every change to these settings, including from its UI, until that home board is set " +
 				"to a public board or to \"\"."
 		}
 	}

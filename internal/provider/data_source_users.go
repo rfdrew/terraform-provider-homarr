@@ -210,7 +210,7 @@ func (d *infoDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 			},
 			"version": schema.StringAttribute{
 				Computed:            true,
-				MarkdownDescription: "Homarr version, e.g. `2.4.1`.",
+				MarkdownDescription: "Homarr version, e.g. `2.5.2`.",
 			},
 		},
 	}

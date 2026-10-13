@@ -11,13 +11,14 @@ OpenAPI-compatible REST API.
 
 ## Compatibility
 
-**Provider 0.3.0** is built and verified against **Homarr 2.4.1**. Every feature
+**Provider 0.3.1** is built and verified against **Homarr 2.5.2**. Every feature
 works from Homarr **2.3.0**. Homarr 2.0–2.2 work too, except for the features
 below that need a newer Homarr; each one's page says so. The provider warns when
 Homarr reports a major version other than 2.
 
 | Provider | Verified against | Supported Homarr | Terraform |
 | --- | --- | --- | --- |
+| 0.3.1 | Homarr 2.5.2 | 2.3.0 and newer 2.x; 2.0–2.2 with the exceptions below | 1.9+ |
 | 0.3.0 | Homarr 2.4.1 | 2.3.0 and newer 2.x; 2.0–2.2 with the exceptions below | 1.9+ |
 | 0.2.0 | Homarr 1.76.2 | 1.x; not tested against 2.x | 1.9+ |
 | 0.1.0 | Homarr 1.73.0 | 1.x; not tested against 2.x | 1.9+ |

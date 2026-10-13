@@ -5,7 +5,7 @@ OpenAPI-compatible REST API.
 
 ## Versions
 
-**Provider 0.3.0** — built and verified against **Homarr 2.4.1**. Every feature
+**Provider 0.3.1** — built and verified against **Homarr 2.5.2**. Every feature
 works from Homarr **2.3.0**. Homarr 2.0–2.2 work too, but the features listed
 under [Minimum Homarr versions](#minimum-homarr-versions) are unavailable or
 degraded there. The provider warns when Homarr reports a major version other
@@ -13,12 +13,16 @@ than 2.
 
 | Provider | Released | Verified against | Supported Homarr | Terraform |
 | --- | --- | --- | --- | --- |
+| 0.3.1 | unreleased | Homarr 2.5.2 | 2.3.0 and newer 2.x; 2.0–2.2 with the exceptions below | 1.9+ (see below) |
 | 0.3.0 | 2026-10-12 | Homarr 2.4.1 | 2.3.0 and newer 2.x; 2.0–2.2 with the exceptions below | 1.9+ (see below) |
 | 0.2.0 | 2026-10-05 | Homarr 1.76.2 | 1.x; not tested against 2.x | 1.9+ |
 | 0.1.0 | 2026-08-06 | Homarr 1.73.0 | 1.x; not tested against 2.x | 1.9+ |
 
-Homarr 2.4.1 changed nothing on the REST surface since 2.3.0, so both behave
-identically; CI runs the acceptance tests against each. On Homarr 2, use 0.3.0.
+The REST surface is the same from Homarr 2.3.0 to 2.5.2. The one difference the
+provider meets is that 2.5.0 and later check the stored home boards on every
+change to the instance board settings (see
+[Known limitations](#known-limitations)); CI runs the acceptance tests against
+2.3.0, 2.4.1 and 2.5.2. On Homarr 2, use 0.3.x.
 
 Terraform 1.9 is enough for everything except:
 
@@ -141,7 +145,7 @@ lists, item by item, what Homarr would have to add to lift them.
   of silently dropping it from state.
 * **Deleting a board does not clear the instance home boards.**
   `homarr_server_board_settings` then points at a missing board, and the
-  provider warns on destroy. The release after 2.4.1 refuses every later change
+  provider warns on destroy. Homarr 2.5.0 and later refuse every later change
   to those settings while a stored home board is private or missing, so clear
   the home boards before destroying the board they point at.
 * **`PATCH` on apps is a full replace.** Every field is required-but-nullable, so
@@ -299,7 +303,7 @@ make lint           # gofmt + go vet + terraform fmt
 mints an admin API key. Onboarding is not part of the REST API, so the script
 drives the same tRPC endpoints the UI uses.
 
-The container runs Homarr 2.4.1 by default. Set `HOMARR_TEST_IMAGE` to test
+The container runs Homarr 2.5.2 by default. Set `HOMARR_TEST_IMAGE` to test
 another release; the script replaces a leftover container built from a different
 image.
 
@@ -313,7 +317,7 @@ eval "$(HOMARR_TEST_IMAGE=ghcr.io/homarr-labs/homarr:v2.3.0 make homarr-up)"
 eval "$(HOMARR_TEST_IMAGE=ghcr.io/homarr-labs/homarr:dev make homarr-up)"
 ```
 
-CI runs the acceptance tests against Homarr 2.3.0 and 2.4.1 on several Terraform
+CI runs the acceptance tests against Homarr 2.3.0, 2.4.1 and 2.5.2 on several Terraform
 releases, plus a non-blocking run against the `dev` image to catch upcoming
 changes early.
 

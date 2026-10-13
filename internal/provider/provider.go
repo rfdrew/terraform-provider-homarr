@@ -33,7 +33,7 @@ var (
 // different major version.
 const (
 	testedHomarrMajor   = 2
-	testedHomarrVersion = "2.4.1"
+	testedHomarrVersion = "2.5.2"
 )
 
 type homarrProvider struct {
@@ -67,7 +67,7 @@ func (p *homarrProvider) Metadata(_ context.Context, _ provider.MetadataRequest,
 func (p *homarrProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages resources in a [Homarr](https://homarr.dev) dashboard instance through its " +
-			"OpenAPI-compatible REST API. Built and verified against Homarr 2.4.1; every feature works from " +
+			"OpenAPI-compatible REST API. Built and verified against Homarr 2.5.2; every feature works from " +
 			"Homarr 2.3.0, and the rest of 2.x is supported apart from the features that name a newer release.\n\n" +
 			"Only the subset of Homarr's API that is exposed over REST can be managed. Integrations and groups " +
 			"can only be managed over tRPC and are therefore out of scope; for integrations REST offers just a " +

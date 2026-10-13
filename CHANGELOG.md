@@ -6,6 +6,22 @@ All notable changes to this provider are recorded here. The format follows
 at 0.x, a minor release may change behaviour; such changes are listed under
 **Breaking and behaviour changes**.
 
+## [0.3.1] - Unreleased
+
+Verified against Homarr 2.5.2. No change in behaviour.
+
+### Changed
+
+- Built and verified against Homarr 2.5.2, previously 2.4.1. Homarr 2.5.0–2.5.2
+  changed nothing on the REST surface; 0.3.0 already handles what 2.5.0 does
+  differently — it checks the stored home boards on every change to the
+  instance board settings, drops the creator's email from `GET /api/boards`,
+  and on PostgreSQL creates users with `open_search_in_new_tab = true`, as
+  SQLite already did.
+- The descriptions name Homarr 2.5.0 where they said "the release after 2.4.1".
+- The throwaway test instance defaults to Homarr 2.5.2, and CI runs the
+  acceptance tests against Homarr 2.3.0, 2.4.1 and 2.5.2.
+
 ## [0.3.0] - 2026-10-12
 
 Homarr 2 support. Built and verified against Homarr 2.4.1.
@@ -225,6 +241,7 @@ Initial release, verified against Homarr 1.73.0.
 - Data sources `homarr_app`, `homarr_apps`, `homarr_board`, `homarr_boards`,
   `homarr_users` and `homarr_info`.
 
+[0.3.1]: https://github.com/rfdrew/terraform-provider-homarr/compare/v0.3.0...HEAD
 [0.3.0]: https://github.com/rfdrew/terraform-provider-homarr/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/rfdrew/terraform-provider-homarr/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/rfdrew/terraform-provider-homarr/releases/tag/v0.1.0

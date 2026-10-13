@@ -8,7 +8,7 @@ import (
 
 // BoardCreator is the embedded creator object in a board summary.
 //
-// Homarr 2.4.1 also sends the creator's email, but unreleased Homarr drops it
+// Homarr 2.4.1 and earlier also send the creator's email, but 2.5.0 drops it
 // from this public endpoint, so it is deliberately not decoded.
 type BoardCreator struct {
 	ID    string  `json:"id"`

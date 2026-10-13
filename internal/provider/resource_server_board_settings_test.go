@@ -41,7 +41,7 @@ resource "homarr_board" "server_private" {
 `
 
 // testAccStoredHomeBoardsChecked reports whether the Homarr under test checks
-// the stored home boards on every change, as the release after 2.4.1 does,
+// the stored home boards on every change, as Homarr 2.5.0 and later do,
 // rather than only the ones a change sends. It sends an empty patch, which
 // changes nothing, and must be called while a home board is known to dangle.
 // Asking Homarr is more reliable than comparing versions, since a development
@@ -64,8 +64,8 @@ func testAccStoredHomeBoardsChecked() (bool, error) {
 // TestAccServerBoardSettingsResource takes over the instance-wide settings of
 // the test instance. Its later steps delete a board while the desktop home
 // board still points at it, as destroying a configuration holding both would,
-// and check what happens to the next change: Homarr 2.4.1 accepts it, and the
-// release after it refuses it with the stored-board error. The last step
+// and check what happens to the next change: Homarr 2.4.1 accepts it, and
+// 2.5.0 and later refuse it with the stored-board error. The last step
 // clears both home boards, so the test leaves no dangling id behind.
 func TestAccServerBoardSettingsResource(t *testing.T) {
 	// deletedBoardID is the public board's id, kept for after it is deleted.
@@ -203,7 +203,7 @@ resource "homarr_server_board_settings" "this" {
 				),
 			},
 			{
-				// The release after 2.4.1 checks the stored result, so the same
+				// Homarr 2.5.0 and later check the stored result, so the same
 				// change is refused, and the error blames the unmanaged slot.
 				SkipFunc: func() (bool, error) {
 					checked, err := testAccStoredHomeBoardsChecked()
