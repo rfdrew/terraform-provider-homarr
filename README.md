@@ -13,7 +13,7 @@ than 2.
 
 | Provider | Released | Verified against | Supported Homarr | Terraform |
 | --- | --- | --- | --- | --- |
-| 0.3.1 | unreleased | Homarr 2.5.2 | 2.3.0 and newer 2.x; 2.0–2.2 with the exceptions below | 1.9+ (see below) |
+| 0.3.1 | 2026-10-13 | Homarr 2.5.2 | 2.3.0 and newer 2.x; 2.0–2.2 with the exceptions below | 1.9+ (see below) |
 | 0.3.0 | 2026-10-12 | Homarr 2.4.1 | 2.3.0 and newer 2.x; 2.0–2.2 with the exceptions below | 1.9+ (see below) |
 | 0.2.0 | 2026-10-05 | Homarr 1.76.2 | 1.x; not tested against 2.x | 1.9+ |
 | 0.1.0 | 2026-08-06 | Homarr 1.73.0 | 1.x; not tested against 2.x | 1.9+ |

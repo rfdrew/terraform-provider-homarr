@@ -6,7 +6,7 @@ All notable changes to this provider are recorded here. The format follows
 at 0.x, a minor release may change behaviour; such changes are listed under
 **Breaking and behaviour changes**.
 
-## [0.3.1] - Unreleased
+## [0.3.1] - 2026-10-13
 
 Verified against Homarr 2.5.2. No change in behaviour.
 
@@ -241,7 +241,7 @@ Initial release, verified against Homarr 1.73.0.
 - Data sources `homarr_app`, `homarr_apps`, `homarr_board`, `homarr_boards`,
   `homarr_users` and `homarr_info`.
 
-[0.3.1]: https://github.com/rfdrew/terraform-provider-homarr/compare/v0.3.0...HEAD
+[0.3.1]: https://github.com/rfdrew/terraform-provider-homarr/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/rfdrew/terraform-provider-homarr/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/rfdrew/terraform-provider-homarr/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/rfdrew/terraform-provider-homarr/releases/tag/v0.1.0
